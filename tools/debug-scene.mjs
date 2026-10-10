@@ -35,7 +35,7 @@ const raw = Buffer.from(seg.mask.data);
 writeFileSync(join(out, 'mask.raw'), raw);
 writeFileSync(join(out, 'corners.json'), JSON.stringify(lines));
 execFileSync('python3', [
-  '-I',
+  '-P',
   '-c',
   `
 import sys, json

@@ -30,7 +30,7 @@ if m and max(im.size) > m:
     im = im.resize((round(im.width * f), round(im.height * f)), Image.LANCZOS)
 sys.stdout.buffer.write(im.width.to_bytes(4, 'little') + im.height.to_bytes(4, 'little') + im.tobytes())
 `;
-  const buf = execFileSync('python3', ['-I', '-c', py, path, String(max)], { maxBuffer: 1 << 30 });
+  const buf = execFileSync('python3', ['-P', '-c', py, path, String(max)], { maxBuffer: 1 << 30 });
   const width = buf.readUInt32LE(0);
   const height = buf.readUInt32LE(4);
   return { width, height, data: new Uint8ClampedArray(buf.buffer, buf.byteOffset + 8, width * height * 4) };
