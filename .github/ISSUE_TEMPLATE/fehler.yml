@@ -1,0 +1,19 @@
+name: Fehler
+description: Etwas funktioniert nicht (Kamera, Anzeige, Absturz)
+labels: [bug]
+body:
+  - type: textarea
+    id: was
+    attributes:
+      label: Was ist passiert, was hättest du erwartet?
+    validations:
+      required: true
+  - type: textarea
+    id: schritte
+    attributes:
+      label: Schritte zum Nachstellen
+  - type: input
+    id: geraet
+    attributes:
+      label: Gerät und Browser
+      placeholder: Pixel 9, Chrome 152

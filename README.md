@@ -57,8 +57,8 @@ flowchart LR
   Bildrand; dessen häufigste Farbtöne bilden das Tischmodell. Pixel, die
   deutlich abweichen, sind Puzzle. Ein Teil muss einen deutlich abweichenden
   Kern haben und reicht bis zu einer niedrigeren Schwelle (Hysterese), so
-  bleiben Umrisse sauber und Maserung fällt weg. Zusätzlich schärft GrabCut
-  jeden Umriss nach; genommen wird die Variante mit der besseren Form. Alle
+  bleiben Umrisse sauber und Maserung fällt weg. Ist die Form unsauber,
+  schärft GrabCut den Umriss nach; genommen wird die bessere Variante. Alle
   Pixelmaße sind auf rund 90 px Teilgröße abgestimmt, das Foto wird passend
   skaliert.
 - **Teil vermessen** ([`core/piece.js`](core/piece.js)): Die geraden Stücke aller
@@ -115,6 +115,12 @@ Nach Änderungen an App-Dateien `VERSION` in [`sw.js`](sw.js) hochzählen.
 - Puzzles mit unregelmäßigem Schnitt (keine Reihen und Spalten) werden nicht
   unterstützt.
 - Getestet an künstlichen Fotos; echte Handyfotos sind die nächste Probe.
+
+## Mitarbeiten
+
+Fehlerberichte mit Fotos und Pull Requests sind willkommen, siehe
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Änderungen stehen in
+[`CHANGELOG.md`](CHANGELOG.md).
 
 ## Lizenz
 

@@ -1,0 +1,32 @@
+name: Falsch erkannt
+description: Teile nicht gefunden, falscher Platz oder falsche Drehung
+labels: [erkennung]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Danke! Fotos helfen am meisten: das Vorlagenfoto und das Teilefoto.
+        Bitte nur Fotos anhängen, die du selbst gemacht hast; sie werden hier
+        öffentlich.
+  - type: textarea
+    id: was
+    attributes:
+      label: Was ist passiert?
+      description: z. B. „Teil 4 gehört eine Spalte weiter links“ oder „acht Teile nicht erkannt“
+    validations:
+      required: true
+  - type: textarea
+    id: fotos
+    attributes:
+      label: Fotos
+      description: Vorlage und Teilefoto hierher ziehen oder einfügen.
+  - type: input
+    id: teile
+    attributes:
+      label: Teilezahl und Raster
+      placeholder: 500 Teile, 25 × 20
+  - type: input
+    id: geraet
+    attributes:
+      label: Gerät und Browser
+      placeholder: iPhone 16, Safari 26
