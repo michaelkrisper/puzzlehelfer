@@ -1,0 +1,4 @@
+*.out.jpg
+_site/
+node_modules/
+__pycache__/

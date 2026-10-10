@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#1d2a3a" />
+    <meta name="description" content="Puzzleteile fotografieren und erfahren, wo und wie gedreht sie hingehören." />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Puzzlehelfer" />
+    <title>Puzzlehelfer</title>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="icons/icon-192.png" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Puzzlehelfer</h1>
+      <span id="engine" class="engine">Bilderkennung lädt …</span>
+    </header>
+
+    <main>
+      <!-- Schritt 1: Vorlage -->
+      <section id="step-ref" class="card">
+        <h2><span class="num">1</span> Vorlage</h2>
+        <div id="ref-empty">
+          <p class="hint">Fotografiere das Bild des fertigen Puzzles, etwa die Schachtel, möglichst gerade von oben.</p>
+          <div class="row">
+            <label class="btn primary">Foto aufnehmen<input type="file" accept="image/*" capture="environment" data-ref hidden /></label>
+            <label class="btn">Bild wählen<input type="file" accept="image/*" data-ref hidden /></label>
+          </div>
+        </div>
+
+        <div id="ref-crop" hidden>
+          <p class="hint">Ziehe die vier Ecken auf die Ecken des Puzzlebilds.</p>
+          <div class="crop-wrap"><canvas id="crop-canvas"></canvas></div>
+          <div class="row">
+            <button type="button" class="btn" id="crop-full">Ganzes Bild</button>
+            <button type="button" class="btn primary" id="crop-ok">Übernehmen</button>
+          </div>
+        </div>
+
+        <div id="ref-done" hidden>
+          <div class="ref-view"><canvas id="ref-canvas"></canvas></div>
+          <div class="count">
+            <label for="count">Teile</label>
+            <input id="count" type="number" inputmode="numeric" min="4" max="5000" step="1" />
+            <div class="chips" id="chips"></div>
+          </div>
+          <div class="grid-adjust">
+            <span>Raster</span>
+            <button type="button" class="mini" data-adj="cols" data-d="-1" aria-label="Eine Spalte weniger">−</button>
+            <b id="cols"></b>
+            <button type="button" class="mini" data-adj="cols" data-d="1" aria-label="Eine Spalte mehr">+</button>
+            <span>×</span>
+            <button type="button" class="mini" data-adj="rows" data-d="-1" aria-label="Eine Reihe weniger">−</button>
+            <b id="rows"></b>
+            <button type="button" class="mini" data-adj="rows" data-d="1" aria-label="Eine Reihe mehr">+</button>
+            <span id="grid-total" class="muted"></span>
+          </div>
+          <div class="row">
+            <button type="button" class="btn small" id="ref-redo">Andere Vorlage</button>
+            <button type="button" class="btn small" id="ref-recrop">Ecken ändern</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Schritt 2: Teile -->
+      <section id="step-scene" class="card" hidden>
+        <h2><span class="num">2</span> Teile</h2>
+        <p class="hint">
+          Lege die offenen Teile mit Abstand und Bildseite nach oben auf einen einfarbigen Tisch. Das halbfertige
+          Puzzle darf mit aufs Foto, dann zeigen Pfeile direkt auf den Platz.
+        </p>
+        <div class="row">
+          <label class="btn primary">Foto aufnehmen<input type="file" accept="image/*" capture="environment" data-scene hidden /></label>
+          <label class="btn">Bild wählen<input type="file" accept="image/*" multiple data-scene hidden /></label>
+        </div>
+        <div id="thumbs" class="thumbs"></div>
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+        <div id="result" hidden>
+          <div class="viewer-wrap"><canvas id="viewer"></canvas></div>
+          <div class="legend">
+            <span><i class="sw ok"></i>sicher</span><span><i class="sw maybe"></i>vermutlich</span><span><i class="sw bad"></i>nicht erkannt</span>
+            <span class="muted">Zwei Finger zoomen, Teil antippen für Details</span>
+          </div>
+          <div class="row">
+            <button type="button" class="btn small" id="all-arrows">Alle Pfeile zeigen</button>
+          </div>
+          <h3>Plätze im Bild</h3>
+          <div class="ref-view"><canvas id="map"></canvas></div>
+          <div class="row">
+            <button type="button" class="btn" id="new-round">Neue Runde (nach dem Einsetzen)</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="detail">
+      <form method="dialog">
+        <h3 id="detail-title">Teil</h3>
+        <div class="detail-pair">
+          <figure><canvas id="detail-piece"></canvas><figcaption>Teil, richtig gedreht</figcaption></figure>
+          <figure><canvas id="detail-ref"></canvas><figcaption>Platz in der Vorlage</figcaption></figure>
+        </div>
+        <p id="detail-text"></p>
+        <div id="detail-alts" class="alts"></div>
+        <button type="submit" class="btn primary" value="close">Schließen</button>
+      </form>
+    </dialog>
+
+    <script src="core/geom.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

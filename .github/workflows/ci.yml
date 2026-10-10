@@ -1,0 +1,65 @@
+name: CI
+
+# Prüft jeden Push und Pull Request (Lint, Unit- und Erkennungstests,
+# Browsertest) und veröffentlicht den Stand von main auf GitHub Pages.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: Lint und Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npx biome ci
+      - name: Ruff (tools/*.py)
+        run: |
+          pipx run ruff check tools
+          pipx run ruff format --check tools
+      # Testfotos entstehen mit tools/synth.py aus tests/fixtures/picture.jpg.
+      - run: pip install pillow numpy
+      - run: npm test
+      # Chrome ist auf dem Runner vorinstalliert.
+      - run: npm run test:e2e
+
+  deploy:
+    name: GitHub Pages
+    needs: check
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Seite zusammenstellen
+        run: |
+          mkdir _site
+          cp -r index.html style.css app.js worker.js sw.js manifest.webmanifest core icons vendor _site/
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+      - id: pages
+        uses: actions/deploy-pages@v5

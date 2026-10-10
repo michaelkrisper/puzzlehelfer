@@ -1,0 +1,28 @@
+{
+  "name": "puzzlehelfer",
+  "version": "1.0.0",
+  "description": "Puzzleteile fotografieren und erfahren, wo und wie gedreht sie hingehören – als installierbare Web-App direkt im Browser",
+  "homepage": "https://michaelkrisper.github.io/puzzlehelfer/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/michaelkrisper/puzzlehelfer.git"
+  },
+  "author": "Michael Krisper",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "serve": "python3 -m http.server 8793",
+    "lint": "biome check",
+    "lint:fix": "biome check --write",
+    "test": "node --test tests/*.test.mjs",
+    "check": "npm run lint && npm test",
+    "test:e2e": "node tests/e2e.mjs && E2E_PARTIAL=1 node tests/e2e.mjs",
+    "bench": "node tools/bench.mjs"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.15"
+  }
+}
