@@ -1,129 +1,154 @@
 # Puzzlehelfer
 
 [![CI](https://github.com/michaelkrisper/puzzlehelfer/actions/workflows/ci.yml/badge.svg)](https://github.com/michaelkrisper/puzzlehelfer/actions/workflows/ci.yml)
-[![Lizenz: MIT](https://img.shields.io/badge/Lizenz-MIT-blue.svg)](LICENSE)
-[![PWA](https://img.shields.io/badge/PWA-offline--f%C3%A4hig-5a0fc8)](https://michaelkrisper.github.io/puzzlehelfer/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![PWA](https://img.shields.io/badge/PWA-works%20offline-5a0fc8)](https://michaelkrisper.github.io/puzzlehelfer/)
 
-Puzzleteile fotografieren und erfahren, wo sie hingehören und wie herum. Die
-App vergleicht jedes Teil mit dem Bild auf der Schachtel und prüft, ob Nasen,
-Löcher und gerade Kanten passen. Alles läuft im Browser, kein Foto verlässt
-das Gerät.
+Take a photo of jigsaw pieces and find out where they belong and which way
+round. The app compares every piece with the picture on the box and checks
+whether knobs, holes and straight edges fit. Everything runs in the browser;
+no photo leaves the device. The app's interface is in German.
 
 **→ [michaelkrisper.github.io/puzzlehelfer](https://michaelkrisper.github.io/puzzlehelfer/)**
 
 <p align="center">
-  <img src="docs/screenshot.png" width="420" alt="Ausschnitt der Ergebnisansicht: Puzzleteile auf einem Holztisch, jedes mit Nummer und weißem Bogenpfeil, der Drehrichtung und Grad angibt">
+  <img src="docs/screenshot.png" width="420" alt="Part of the result view: puzzle pieces on a wooden table, each with a number and a white curved arrow showing direction and degrees of rotation">
 </p>
 
-## Benutzung
+## Usage
 
-1. **Vorlage:** das Bild des fertigen Puzzles fotografieren (Schachteldeckel)
-   oder ein Bild wählen, etwa vom Hersteller. Die App sucht die Bildecken
-   selbst; bei Bedarf mit dem Finger nachziehen.
-2. **Teilezahl** antippen oder eintippen. Das Raster ergibt sich aus Zahl und
-   Seitenverhältnis und lässt sich mit −/+ korrigieren.
-3. **Teile fotografieren:** mit etwas Abstand zueinander, Bildseite nach oben,
-   auf einem möglichst einfarbigen Tisch, gerade von oben. Das halbfertige
-   Puzzle darf mit aufs Foto.
-4. Ergebnis: jedes erkannte Teil hat eine **Nummer**, ein **Bogenpfeil** zeigt
-   Drehrichtung und Grad. Liegt das halbfertige Puzzle im Foto, zeigt ein
-   **Pfeil** direkt auf den Platz. Darunter sind die Plätze in der Vorlage
-   markiert. Ein Teil antippen zeigt es richtig gedreht neben seinem Platz.
-5. Teile einsetzen, **neue Runde**, wieder fotografieren. Mit jedem
-   eingesetzten Teil kennt die App mehr Lücken und findet weitere Teile.
+1. **Reference:** take a photo of the finished picture (box lid or poster) or
+   pick an image, e.g. from the manufacturer. The app finds the picture
+   corners itself; drag them with a finger if needed.
+2. **Piece count:** tap or type it. The grid follows from count and aspect
+   ratio; correct it with −/+ (puzzles with rectangular pieces, e.g. 12 × 20
+   for 240 pieces, need this).
+3. **Photograph pieces:** picture side up, a little apart, straight from
+   above. The half-finished puzzle may be in the photo, and it helps a lot:
+   occupied places, colour calibration and the exact geometry come from it.
+4. Result: every recognised piece has a **number**, a **curved arrow** shows
+   direction and degrees of rotation. If the half-finished puzzle is in the
+   photo, a **straight arrow** points at the place. Pieces you have already
+   joined into a group get a **letter** and are placed as a whole. Below, the
+   places are marked on the reference. Tap a piece to see it rotated next to
+   its place.
+5. Put pieces in, **new round**, photograph again. Every placed piece gives
+   the app more gaps to work with.
 
-Mehrere Fotos in einer Runde sind möglich (mehr Teile oder Nahaufnahmen). Ein
-Teil, das auf zwei Fotos vorkommt, wird erkannt und nur einmal verplant.
+Several photos per round are possible (more pieces or close-ups). A piece
+that appears in two photos is recognised and planned only once.
 
-Grün heißt sicher, gelb vermutlich. Lieber ein ehrliches „vermutlich“ als ein
-falsches „sicher“: In den Tests stimmen über 99 % der sicheren Vorschläge.
+Green means sure, yellow probably. An honest "probably" is better than a
+wrong "sure".
 
-## Wie es funktioniert
+## How it works
 
 ```mermaid
 flowchart LR
-  A[Foto] --> B[Teile vom Tisch trennen<br><sub>Farbmodell des Tischs, Hysterese</sub>]
-  B --> C[Teil vermessen<br><sub>4 Ecken, Nase/Loch/gerade</sub>]
-  C --> D[Grobsuche<br><sub>alle Plätze × 4 Drehungen</sub>]
-  D --> E[Feinvergleich<br><sub>pixelweise, ±¼ Zelle</sub>]
-  E --> F[Zuordnung<br><sub>von außen nach innen</sub>]
+  A[Photo] --> B[Separate pieces from table<br><sub>table colour model, outlines</sub>]
+  B --> C[Measure piece<br><sub>core rectangle, knob/hole/flat</sub>]
+  C --> D[Feature points<br><sub>SIFT + BRISK, RANSAC</sub>]
+  C --> E[Image comparison<br><sub>all places × rotations</sub>]
+  D --> F[Assignment<br><sub>outside in, neighbour shapes</sub>]
+  E --> F
 ```
 
-- **Vorlage** ([`core/reference.js`](core/reference.js)): größtes Viereck im Foto
-  (Kanten oder Fläche, die sich vom Tisch abhebt), innerhalb davon die erste
-  durchgehende Kante nach einem gleichmäßigen Rand, damit Schachtelrand und
-  Schriftzug wegfallen. Das Bild wird entzerrt und in Zellen geteilt.
-- **Teile trennen** ([`core/segment.js`](core/segment.js)): Der Tisch füllt den
-  Bildrand; dessen häufigste Farbtöne bilden das Tischmodell. Pixel, die
-  deutlich abweichen, sind Puzzle. Ein Teil muss einen deutlich abweichenden
-  Kern haben und reicht bis zu einer niedrigeren Schwelle (Hysterese), so
-  bleiben Umrisse sauber und Maserung fällt weg. Ist die Form unsauber,
-  schärft GrabCut den Umriss nach; genommen wird die bessere Variante. Alle
-  Pixelmaße sind auf rund 90 px Teilgröße abgestimmt, das Foto wird passend
-  skaliert.
-- **Teil vermessen** ([`core/piece.js`](core/piece.js)): Die geraden Stücke aller
-  vier Seiten teilen eine Richtung (modulo 90°), daraus folgen Lage und Ecken.
-  Klappt das nicht, sucht ein zweiter Weg scharfe 90°-Ecken mit geraden
-  Schenkeln. Jede Seite wird als Kurve aus 24 Punkten gespeichert: Größe und
-  Lage der Nase, Halsbreite, Krümmung.
-- **Vergleich** ([`core/match.js`](core/match.js)): Erst grob über Blockmittel
-  an allen Plätzen und Drehungen (Ränder nur dort, wo das Teil gerade Seiten
-  hat, gerade Seite nach außen), dann pixelweise um die besten Kandidaten.
-  Helligkeit und Farbe werden je Kandidat angeglichen, das macht den
-  Vergleich unempfindlich gegen Spiegelungen und Farbstich der Vorlage.
-- **Zuordnung:** immer das sicherste Teil zuerst. Seine Nasen und Löcher
-  werden zu Bedingungen für die Nachbarplätze, wie beim Puzzeln von Hand.
-  Mitten im Leeren braucht ein Vorschlag mehr Sicherheit als am Rand oder
-  neben schon liegenden Teilen, so wächst die Lösung von außen nach innen.
-- **Halbfertiges Puzzle** ([`core/board.js`](core/board.js)): Merkmalspunkte
-  (ORB) legen das fertige Stück per Homographie auf die Vorlage. Daraus
-  folgen die belegten Plätze, der Farbabgleich zwischen Foto und Vorlage und
-  der genaue Umriss jeder Lücke, der mit den Seitenkurven der Teile
-  verglichen wird.
+- **Reference** ([`core/reference.js`](core/reference.js)): largest
+  quadrilateral in the photo (edges, or an area that stands out from the
+  table), inside it the first continuous edge after a uniform margin, so box
+  border and lettering are dropped. The picture is rectified and split into
+  cells. A high-resolution copy in the true aspect ratio carries the feature
+  points (SIFT, BRISK).
+- **Separating pieces** ([`core/segment.js`](core/segment.js)): the table
+  fills the image border; its most frequent colours of the same hue form the
+  table model (wood grain, light falloff). Pixels that differ clearly are
+  puzzle. A piece needs a clearly different core and extends to a lower
+  threshold (hysteresis). Brown pieces on wood are hard to tell apart by
+  colour, but the cardboard edge draws a closed outline with a lot of local
+  structure: strong structure near a detected piece is added and the piece
+  is filled within its outline. Pieces that broke into fragments are joined.
+  If the shape is poor, GrabCut refines the outline. All pixel sizes are
+  tuned to pieces of about 90 px; the photo is scaled accordingly.
+- **Measuring a piece** ([`core/piece.js`](core/piece.js)): the straight
+  parts of all four sides share a direction (modulo 90°), which gives
+  position and corners. A second way looks for sharp 90° corners with
+  straight legs. Pieces with big knobs and wavy cuts have hardly anything
+  straight; for those the piece area is projected onto rows and columns at
+  every angle: at the right angle the profiles jump sharply at every core
+  edge. The core size comes from the finished part on the table. Each side
+  is stored as a curve of 24 points: size and position of the knob, neck
+  width, curvature.
+- **Feature points** ([`core/feature.js`](core/feature.js)): SIFT and BRISK
+  points of each piece are matched against the reference, RANSAC estimates
+  rotation, scale and shift. This finds a piece regardless of its shape and
+  is very reliable on fur, lettering and faces; on plain areas there are no
+  points, there the image comparison decides. A match with several
+  consistent points becomes a strong vote in the assignment.
+- **Image comparison** ([`core/match.js`](core/match.js)): coarse over block
+  means at all places and rotations (edges only where the piece has straight
+  sides, straight side outwards), then pixel by pixel around the best
+  candidates. Brightness and colour are fitted per candidate, which makes the
+  comparison robust against reflections and colour cast of the reference.
+  Rectangular pieces only fit with the long side along the long cell side.
+- **Assignment:** always the surest piece first. Its knobs and holes become
+  constraints for the neighbouring places, just like solving by hand. In the
+  middle of nowhere a suggestion needs more certainty than at the edge or
+  next to placed pieces, so the solution grows from the outside in.
+- **Half-finished puzzle** ([`core/board.js`](core/board.js)): feature points
+  map the finished part onto the reference: a homography plus a smooth cubic
+  correction. The finished part lies flat on the table, so this also
+  straightens a reference that was photographed bent or wavy. From this
+  follow the occupied places, the colour calibration between photo and
+  reference, the exact outline of every gap (compared with the side curves
+  of the pieces) and the cell size at every point of the table. Groups of
+  pieces you joined yourself are located as a whole.
 
-## Entwicklung
+## Development
 
-Vanilla JS ohne Build, OpenCV.js im Web Worker ([`worker.js`](worker.js)).
+Vanilla JS without a build step, OpenCV.js in a web worker
+([`worker.js`](worker.js)).
 
 ```sh
 npm install
 npm run serve          # http://localhost:8793
-npm run check          # Biome + Tests
-npm run test:e2e       # headless Chrome, startet eigenen Server
+npm run check          # Biome + tests
+npm run test:e2e       # headless Chrome, starts its own server
 ```
 
-Die Tests brauchen `python3` mit `numpy` und `Pillow`:
-[`tools/synth.py`](tools/synth.py) erzeugt künstliche Fotos mit bekannter
-Lösung (Puzzle zerschneiden, Teile verdreht auf einen Tisch legen, optional
-ein halbfertiges Puzzle mit Perspektive, Schatten, Rauschen, JPEG) und
-[`tools/bench.mjs`](tools/bench.mjs) misst Erkennung und Zuordnung darauf,
-auch mit absichtlich schlechter Vorlage (`--badref`).
+The tests need `python3` with `numpy` and `Pillow`:
+[`tools/synth.py`](tools/synth.py) creates artificial photos with a known
+solution (cut a puzzle, lay pieces rotated on a table, optionally a
+half-finished puzzle with perspective, shadows, noise, JPEG) and
+[`tools/bench.mjs`](tools/bench.mjs) measures detection and assignment on
+them, also with a deliberately poor reference (`--badref`).
 
 ```sh
-python3 tools/synth.py --image tests/fixtures/picture.jpg --pieces 100 --seed 1 --out /pfad/szene
-node tools/bench.mjs /pfad/szene [--badref]
+python3 tools/synth.py --image tests/fixtures/picture.jpg --pieces 100 --seed 1 --out /path/scene
+node tools/bench.mjs /path/scene [--badref]
 ```
 
-Nach Änderungen an App-Dateien `VERSION` in [`sw.js`](sw.js) hochzählen.
+After changing app files, bump `VERSION` in [`sw.js`](sw.js).
 
-## Grenzen
+## Limits
 
-- Teile dürfen sich nicht berühren; aneinanderliegende Teile werden als
-  „unklar“ markiert.
-- Sehr einfarbige Flächen (Himmel, Meer) lassen sich aus dem Bild allein kaum
-  zuordnen. Hier helfen die Lücken im halbfertigen Puzzle.
-- Puzzles mit unregelmäßigem Schnitt (keine Reihen und Spalten) werden nicht
-  unterstützt.
-- Getestet an künstlichen Fotos; echte Handyfotos sind die nächste Probe.
+- Pieces should not touch; pieces lying against each other are located as a
+  group if feature points allow it, otherwise marked "unclear".
+- Very plain areas (sky, sea) can hardly be placed from the picture alone.
+  The gaps in the half-finished puzzle help here.
+- Puzzles with irregular cuts (no rows and columns) are not supported.
+- The grid is derived from the piece count assuming square pieces; for
+  rectangular pieces set columns and rows with −/+.
+- Analysing a photo takes about a minute in a desktop browser and longer on
+  a phone; feature matching is the expensive part.
 
-## Mitarbeiten
+## Contributing
 
-Fehlerberichte mit Fotos und Pull Requests sind willkommen, siehe
-[`CONTRIBUTING.md`](CONTRIBUTING.md). Änderungen stehen in
+Bug reports with photos and pull requests are welcome, see
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Changes are listed in
 [`CHANGELOG.md`](CHANGELOG.md).
 
-## Lizenz
+## License
 
-MIT, siehe [`LICENSE`](LICENSE). OpenCV.js: Apache-2.0, siehe
-[`vendor/README.md`](vendor/README.md). Testbild: siehe
+MIT, see [`LICENSE`](LICENSE). OpenCV.js: Apache-2.0, see
+[`vendor/README.md`](vendor/README.md). Test image: see
 [`tests/fixtures/SOURCES.md`](tests/fixtures/SOURCES.md).

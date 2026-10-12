@@ -1,19 +1,19 @@
-name: Fehler
-description: Etwas funktioniert nicht (Kamera, Anzeige, Absturz)
+name: Bug
+description: Something does not work (camera, display, crash)
 labels: [bug]
 body:
   - type: textarea
     id: was
     attributes:
-      label: Was ist passiert, was hättest du erwartet?
+      label: What happened, and what did you expect?
     validations:
       required: true
   - type: textarea
     id: schritte
     attributes:
-      label: Schritte zum Nachstellen
+      label: Steps to reproduce
   - type: input
     id: geraet
     attributes:
-      label: Gerät und Browser
+      label: Device and browser
       placeholder: Pixel 9, Chrome 152

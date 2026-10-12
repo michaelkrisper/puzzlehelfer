@@ -1,7 +1,7 @@
 {
   "name": "puzzlehelfer",
   "version": "1.0.0",
-  "description": "Puzzleteile fotografieren und erfahren, wo und wie gedreht sie hingehören – als installierbare Web-App direkt im Browser",
+  "description": "Photograph jigsaw pieces and learn where they go and how to rotate them – as an installable web app right in the browser",
   "homepage": "https://michaelkrisper.github.io/puzzlehelfer/",
   "repository": {
     "type": "git",

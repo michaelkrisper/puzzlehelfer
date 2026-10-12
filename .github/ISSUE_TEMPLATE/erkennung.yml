@@ -1,32 +1,31 @@
-name: Falsch erkannt
-description: Teile nicht gefunden, falscher Platz oder falsche Drehung
+name: Wrong recognition
+description: Pieces not found, wrong place or wrong rotation
 labels: [erkennung]
 body:
   - type: markdown
     attributes:
       value: |
-        Danke! Fotos helfen am meisten: das Vorlagenfoto und das Teilefoto.
-        Bitte nur Fotos anhängen, die du selbst gemacht hast; sie werden hier
-        öffentlich.
+        Thanks! Photos help most: the reference photo and the pieces photo.
+        Please only attach photos you took yourself; they become public here.
   - type: textarea
     id: was
     attributes:
-      label: Was ist passiert?
-      description: z. B. „Teil 4 gehört eine Spalte weiter links“ oder „acht Teile nicht erkannt“
+      label: What happened?
+      description: e.g. "piece 4 belongs one column further left" or "eight pieces not recognised"
     validations:
       required: true
   - type: textarea
     id: fotos
     attributes:
-      label: Fotos
-      description: Vorlage und Teilefoto hierher ziehen oder einfügen.
+      label: Photos
+      description: Drag or paste the reference and the pieces photo here.
   - type: input
     id: teile
     attributes:
-      label: Teilezahl und Raster
-      placeholder: 500 Teile, 25 × 20
+      label: Piece count and grid
+      placeholder: 500 pieces, 25 × 20
   - type: input
     id: geraet
     attributes:
-      label: Gerät und Browser
+      label: Device and browser
       placeholder: iPhone 16, Safari 26

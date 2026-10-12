@@ -1,4 +1,4 @@
-// Ganze Erkennung in Node an einem künstlichen Foto mit 24 Teilen.
+// Full recognition in Node on a synthetic photo with 24 pieces.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -9,7 +9,7 @@ import { evaluate } from '../tools/eval.mjs';
 
 const root = join(import.meta.dirname, '..');
 
-test('24 lose Teile: Platz und Drehung', { timeout: 180000 }, async () => {
+test('24 loose pieces: place and rotation', { timeout: 180000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'puzzlehelfer-test-'));
   try {
     const gen = spawnSync('python3', [
@@ -26,15 +26,15 @@ test('24 lose Teile: Platz und Drehung', { timeout: 180000 }, async () => {
     assert.equal(gen.status, 0, String(gen.stderr));
     const { res } = await evaluate(dir);
     const truth = JSON.parse(readFileSync(join(dir, 'truth.json'), 'utf8'));
-    assert.ok(res.detected >= truth.loose.length - 2, `erkannt ${res.detected}`);
-    assert.ok(res.cellRotOk >= truth.loose.length * 0.8, `richtig ${res.cellRotOk}`);
-    assert.equal(res.accepted, res.acceptedOk, 'sichere Vorschläge stimmen alle');
+    assert.ok(res.detected >= truth.loose.length - 2, `detected ${res.detected}`);
+    assert.ok(res.cellRotOk >= truth.loose.length * 0.8, `right ${res.cellRotOk}`);
+    assert.equal(res.accepted, res.acceptedOk, 'all sure suggestions are right');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('halbfertiges Puzzle im Foto: Brett und Lücken', { timeout: 180000 }, async () => {
+test('half-finished puzzle in photo: board and gaps', { timeout: 180000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'puzzlehelfer-test-'));
   try {
     const gen = spawnSync('python3', [
@@ -56,10 +56,10 @@ test('halbfertiges Puzzle im Foto: Brett und Lücken', { timeout: 180000 }, asyn
     ]);
     assert.equal(gen.status, 0, String(gen.stderr));
     const { res } = await evaluate(dir);
-    assert.ok(res.board, 'Brett gefunden');
-    assert.equal(res.board.filledWrong, 0, 'keine falsch belegten Plätze');
-    assert.ok(res.cellRotOk >= res.loose * 0.75, `richtig ${res.cellRotOk}/${res.loose}`);
-    assert.equal(res.accepted, res.acceptedOk, 'sichere Vorschläge stimmen alle');
+    assert.ok(res.board, 'board found');
+    assert.equal(res.board.filledWrong, 0, 'no wrongly filled places');
+    assert.ok(res.cellRotOk >= res.loose * 0.75, `right ${res.cellRotOk}/${res.loose}`);
+    assert.equal(res.accepted, res.acceptedOk, 'all sure suggestions are right');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

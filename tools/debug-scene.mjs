@@ -1,4 +1,4 @@
-// Zwischenergebnisse einer Szene als Bilder: Maske und erkannte Ecken.
+// Intermediate results of a scene as images: mask and detected corners.
 // node tools/debug-scene.mjs DIR OUTDIR
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';

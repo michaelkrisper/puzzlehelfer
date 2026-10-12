@@ -1,11 +1,11 @@
 /**
- * Ende-zu-Ende in headless Chrome auf Handygröße: Vorlage laden, Ecken
- * übernehmen, Teilezahl setzen, Teilefoto laden, Vorschläge prüfen.
- * Fotos kommen aus tools/synth.py (braucht python3 mit numpy und Pillow).
+ * End-to-end in headless Chrome at phone size: load reference, accept
+ * corners, set piece count, load pieces photo, check suggestions.
+ * Photos come from tools/synth.py (needs python3 with numpy and Pillow).
  *
- *   node tests/e2e.mjs [URL] [Ausgabeordner]
- * Ohne URL startet ein eigener Server auf Port 8794. E2E_PARTIAL=1 testet
- * ein halbfertiges Puzzle im Foto (Pfeile zu den Plätzen).
+ *   node tests/e2e.mjs [URL] [output dir]
+ * Without a URL, starts its own server on port 8794. E2E_PARTIAL=1 tests
+ * a half-finished puzzle in the photo (arrows to the places).
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -24,7 +24,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const work = mkdtempSync(join(tmpdir(), 'puzzlehelfer-e2e-'));
 const profile = mkdtempSync(join(tmpdir(), 'puzzlehelfer-chrome-'));
 const fx = join(work, 'fx');
-// E2E_PARTIAL=1: halbfertiges Puzzle im Foto, Pfeile zeigen auf die Plätze.
+// E2E_PARTIAL=1: half-finished puzzle in the photo, arrows point to the places.
 const partial = !!process.env.E2E_PARTIAL;
 const count = partial ? 60 : 24;
 const gen = spawnSync('python3', [
@@ -136,19 +136,19 @@ try {
   await send('Page.navigate', { url: base });
   check(
     await until(`document.getElementById('engine')?.classList.contains('ready')`, 90000),
-    'Bilderkennung geladen',
+    'image recognition loaded',
   );
   await shot('1-start');
 
-  // 1. Vorlage
+  // 1. Reference
   await setFile('input[data-ref]:not([capture])', join(fx, 'reference.jpg'));
-  check(await until(`!document.getElementById('ref-crop').hidden`), 'Zuschneiden erscheint');
+  check(await until(`!document.getElementById('ref-crop').hidden`), 'crop view appears');
   check(
     await until(`crop.quad && crop.quad[0][0] > state.refImg.image.width * 0.06`, 30000),
-    'Bildrand automatisch gefunden',
+    'picture border found automatically',
   );
   const quad = await evaluate('JSON.stringify(crop.quad)');
-  // referenceQuad bezieht sich auf reference.jpg, die App verkleinert evtl.
+  // referenceQuad refers to reference.jpg; the app may downscale.
   const jpgW = Number(
     spawnSync('python3', [
       '-c',
@@ -162,20 +162,20 @@ try {
       Math.hypot(p[0] - truth.referenceQuad[i][0] * f, p[1] - truth.referenceQuad[i][1] * f),
     ),
   );
-  check(err < 15, `Ecken der Vorlage auf ${err.toFixed(1)} px genau`);
+  check(err < 15, `reference corners accurate to ${err.toFixed(1)} px`);
   await shot('2-crop');
   await evaluate(`document.getElementById('crop-ok').click()`);
   await evaluate(`setCount(${count})`);
-  check(await until(`!document.getElementById('step-scene').hidden && state.refView`), 'Vorlage aufbereitet');
+  check(await until(`!document.getElementById('step-scene').hidden && state.refView`), 'reference prepared');
   check(
     (await evaluate('[state.cols, state.rows].join("x")')) === `${truth.cols}x${truth.rows}`,
-    `Raster ${truth.cols}×${truth.rows}`,
+    `grid ${truth.cols}×${truth.rows}`,
   );
   await shot('3-reference');
 
-  // 2. Teilefoto
+  // 2. Pieces photo
   await setFile('input[data-scene]:not([capture])', join(fx, 'scene.jpg'));
-  check(await until('state.result !== null', 120000), 'Teilefoto ausgewertet');
+  check(await until('state.result !== null', 120000), 'pieces photo analysed');
   await wait(300);
   const res = await evaluate(`(() => {
     const info = state.result.scenes[0];
@@ -194,19 +194,19 @@ try {
   }
   check(
     right >= truth.loose.length * 0.8,
-    `${right}/${truth.loose.length} Teile mit Platz und Drehung richtig`,
+    `${right}/${truth.loose.length} pieces with right place and rotation`,
   );
   if (partial) {
-    check(await evaluate('!!state.result.scenes[0].board'), 'halbfertiges Puzzle im Foto erkannt');
+    check(await evaluate('!!state.result.scenes[0].board'), 'half-finished puzzle in photo detected');
     check(
       await evaluate(`state.result.suggestions.filter((s) => s.level === 'ok' && s.target).length > 0`),
-      'Pfeile zu den Plätzen',
+      'arrows to the places',
     );
   }
-  check(wrongSure === 0, `keine falschen sicheren Vorschläge (${wrongSure})`);
+  check(wrongSure === 0, `no wrong sure suggestions (${wrongSure})`);
   await evaluate(`document.getElementById('result').scrollIntoView()`);
   await shot('4-result');
-  // Hineinzoomen: Gradzahlen und Pfeile müssen lesbar werden.
+  // Zoom in: degree labels and arrows must become readable.
   const clip = await evaluate(`(() => {
     zoomAt(view.cssW / 2, view.cssH / 2, 2.6);
     clampView();
@@ -217,14 +217,14 @@ try {
   const z = await send('Page.captureScreenshot', { format: 'png', clip, captureBeyondViewport: true });
   writeFileSync(join(out, '4-zoom.png'), Buffer.from(z.data, 'base64'));
 
-  // Details eines Teils
+  // Details of one piece
   await evaluate(`(() => {
     const s = state.result.suggestions.find((x) => x.level === 'ok');
     openDetail(s, state.result.scenes[0]);
   })()`);
-  check(await evaluate(`document.getElementById('detail').open`), 'Detailansicht öffnet sich');
+  check(await evaluate(`document.getElementById('detail').open`), 'detail view opens');
   await shot('5-detail');
-  check(errors.length === 0, `keine Fehler in der Konsole ${errors.join(' | ')}`);
+  check(errors.length === 0, `no errors in the console ${errors.join(' | ')}`);
 } catch (err) {
   console.log('FAIL', err.message);
   ok = false;
@@ -235,5 +235,5 @@ try {
   rmSync(profile, { recursive: true, force: true });
   rmSync(work, { recursive: true, force: true });
 }
-console.log(ok ? 'Alles in Ordnung' : 'Fehlgeschlagen', `– Bilder in ${out}`);
+console.log(ok ? 'All good' : 'Failed', `– images in ${out}`);
 process.exit(ok ? 0 : 1);

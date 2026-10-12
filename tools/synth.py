@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Synthetische Testdaten fuer den Puzzlehelfer.
+"""Synthetic test data for Puzzlehelfer.
 
-Zerlegt ein Bild in Puzzleteile und erzeugt daraus ein Schachtelfoto (reference.jpg),
-ein Tischfoto mit losen (und optional teilweise gelegten) Teilen (scene.jpg) und die
-exakte Wahrheit (truth.json).
+Cuts an image into puzzle pieces and renders a box photo (reference.jpg), a table
+photo with loose (and optionally partly assembled) pieces (scene.jpg) and the exact
+ground truth (truth.json).
 
-Beispiel:
-  python3 tools/synth.py --image bild.jpg --pieces 100 --seed 1 --out ~/.cache/puzzlehelfer-work/x
+Example:
+  python3 tools/synth.py --image picture.jpg --pieces 100 --seed 1 --out ~/.cache/puzzlehelfer-work/x
 """
 
 import argparse
@@ -19,14 +19,14 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-SS = 4  # Supersampling fuer Masken
-PAD = 14  # Rand um jede Kachel, damit der Schatten Platz hat
-Q = 4  # Zellgroesse der Belegungskarte in Szenenpixeln
-GAP = 8  # Mindestabstand zwischen losen Teilen in Szenenpixeln
-LIGHT = np.array([-0.6, -0.8])  # Richtung zur Lichtquelle (oben links), Bildkoordinaten
+SS = 4  # supersampling for masks
+PAD = 14  # margin around each tile so the shadow fits
+Q = 4  # cell size of the occupancy map in scene pixels
+GAP = 8  # minimum gap between loose pieces in scene pixels
+LIGHT = np.array([-0.6, -0.8])  # direction to the light source (top left), image coordinates
 
 
-# ---------------------------------------------------------------- Geometrie
+# ---------------------------------------------------------------- Geometry
 
 
 def choose_grid(n, aspect):
@@ -44,7 +44,7 @@ def grid_points(cols, rows, w, h, rng):
     xs, ys = np.meshgrid(np.arange(cols + 1) * cw, np.arange(rows + 1) * ch)
     jx = rng.uniform(-0.04, 0.04, xs.shape) * cw
     jy = rng.uniform(-0.04, 0.04, ys.shape) * ch
-    # Randpunkte bleiben auf der Bildkante, gleiten aber entlang
+    # border points stay on the image edge but slide along it
     jx[:, [0, -1]] = 0
     jy[[0, -1], :] = 0
     return np.stack([xs + jx, ys + jy], -1)
@@ -52,9 +52,9 @@ def grid_points(cols, rows, w, h, rng):
 
 @dataclass
 class Knob:
-    sign: int  # +1: Nase zeigt nach +x bzw. +y
-    pos: float  # Lage entlang der Kante (Anteil)
-    radius: float  # Kopfradius, wie alle Laengen in Einheiten der Zellseite
+    sign: int  # +1: tab points to +x or +y
+    pos: float  # position along the edge (fraction)
+    radius: float  # head radius; like all lengths, in units of the cell side
     beta_l: float
     beta_r: float
     neck: float
@@ -86,10 +86,10 @@ def random_knob(rng):
 
 
 def fix_collisions(hk, vk, cols, rows, lx, ly):
-    """Zwei Loecher an derselben Teilecke duerfen sich nicht beruehren.
+    """Two holes at the same piece corner must not touch.
 
-    Bei Kopfradien um 0.2 und Lage 0.4 wuerden sie sich ueberschneiden; dann werden
-    beide Nasen kleiner und mittiger.
+    With head radii around 0.2 and position 0.4 they would overlap; then both tabs
+    become smaller and more centred.
     """
 
     def heads(r, c):
@@ -132,7 +132,7 @@ def bezier(p0, p1, p2, p3, n):
 
 
 def knob_profile(k, length):
-    """Kantenprofil (x entlang, y quer, y>0 Richtung Nase) in Zellseiten-Einheiten."""
+    """Edge profile (x along, y across, y>0 towards the tab) in cell-side units."""
     c, r, hy = k.pos * length, k.radius, k.head_y
     cx = c + k.skew
     cl, sl, cr, sr = math.cos(k.beta_l), math.sin(k.beta_l), math.cos(k.beta_r), math.sin(k.beta_r)
@@ -202,7 +202,7 @@ class Puzzle:
         return {'h': h, 'v': v}
 
 
-# ---------------------------------------------------------------- Transformationen
+# ---------------------------------------------------------------- Transforms
 
 
 def translate(tx, ty):
@@ -250,7 +250,7 @@ def to_f(img):
     return np.asarray(img, np.float32) / 255
 
 
-# ---------------------------------------------------------------- Texturen und Foto-Effekte
+# ---------------------------------------------------------------- Textures and photo effects
 
 
 def lowfreq(rng, w, h, gw, gh):
@@ -317,7 +317,7 @@ def font(size):
         return ImageFont.load_default()
 
 
-# ---------------------------------------------------------------- Schachtelfoto
+# ---------------------------------------------------------------- Box photo
 
 
 def reference_photo(pic, n_pieces, rng):
@@ -359,11 +359,11 @@ def reference_photo(pic, n_pieces, rng):
     return photo_finish(arr, rng, noise=2.5), quad
 
 
-# ---------------------------------------------------------------- Platzierung
+# ---------------------------------------------------------------- Placement
 
 
 def dilate(a, r):
-    """Quadratische Dilatation (Chebyshev-Radius r), Ergebnis um r groesser je Seite."""
+    """Square dilation (Chebyshev radius r); result is r larger on each side."""
     h, w = a.shape
     rows = np.zeros((h, w + 2 * r), bool)
     for dx in range(2 * r + 1):
@@ -375,7 +375,7 @@ def dilate(a, r):
 
 
 class Placer:
-    """Belegungskarte in Q-Pixel-Zellen; Fussabdruecke sind konservativ, Abstand >= GAP."""
+    """Occupancy map in Q-pixel cells; footprints are conservative, gap >= GAP."""
 
     def __init__(self, w, h):
         self.occ = np.zeros((-(-h // Q), -(-w // Q)), bool)
@@ -384,7 +384,7 @@ class Placer:
         self.grow = -(-GAP // Q)
 
     def footprint(self, poly_rel, delta):
-        """Abdruck fuer ein Polygon (relativ zum Mittelpunkt), Mittelpunkt bei Q*a + delta."""
+        """Footprint of a polygon (relative to its centre), centre at Q*a + delta."""
         a = np.ceil((-poly_rel.min(0) + 2) / Q).astype(int)
         size = np.ceil((poly_rel.max(0) + Q * a + delta + 2) / Q).astype(int)
         img = Image.new('L', tuple(size * Q), 0)
@@ -414,7 +414,7 @@ class Placer:
             i, j = rng.integers(0, h - fh + 1), rng.integers(0, w - fw + 1)
             if not (self.occ[i : i + fh, j : j + fw] & f).any():
                 return i, j
-        # Zufall fand nichts: alle freien Stellen per FFT-Korrelation bestimmen
+        # random search found nothing: find all free spots via FFT correlation
         spec = np.fft.rfft2(self.occ.astype(np.float32)) * np.conj(np.fft.rfft2(f.astype(np.float32), (h, w)))
         corr = np.fft.irfft2(spec, (h, w))[: h - fh + 1, : w - fw + 1]
         free = np.argwhere(corr < 0.5)
@@ -423,11 +423,11 @@ class Placer:
         return tuple(free[rng.integers(len(free))])
 
 
-# ---------------------------------------------------------------- Rendern
+# ---------------------------------------------------------------- Rendering
 
 
 def shade(mask_img):
-    """Kartonkante: Licht-zugewandte Kanten heller, abgewandte und Rand dunkler."""
+    """Cardboard edge: edges facing the light brighter, those facing away and the rim darker."""
     m = to_f(mask_img)
     mb = to_f(mask_img.filter(ImageFilter.GaussianBlur(1.4)))
     gy, gx = np.gradient(mb)
@@ -463,7 +463,7 @@ class Canvas:
         lid = len(self.layers) + 1
         lab = self.label[dst]
         if (lab[m[src] > 0.02] != 0).any():
-            raise RuntimeError('Teile ueberlappen')
+            raise RuntimeError('pieces overlap')
         lab[m[src] > 0.02] = lid
         self.layers.append((dst, src, rgb * (s * gain)[..., None], m))
 
@@ -475,7 +475,7 @@ class Canvas:
         return out
 
     def min_gap_ok(self, gap):
-        """Prueft per Maximum-Filter, dass jedes Teil zu fremden Teilen >= gap Abstand hat."""
+        """Checks with a maximum filter that every piece is >= gap away from other pieces."""
         for lid, (dst, _, _, _) in enumerate(self.layers, 1):
             y, x = dst
             ys = slice(max(0, y.start - gap), y.stop + gap)
@@ -490,7 +490,7 @@ class Canvas:
 def place_loose(cells, puzzle, src, aq, k, placer, canvas, rng, rot90):
     placed, dropped = [], []
     for r, c in cells:
-        # Tisch voll: weitere FFT-Suchen kosten nur Zeit
+        # table full: more FFT searches only cost time
         if len(dropped) >= 12:
             dropped.append((r, c))
             continue
@@ -549,7 +549,7 @@ def choose_filled(cols, rows, frac, rng):
         take = round(n_fill * rng.uniform(0.7, 0.9))
     take = min(take, n_fill, nb)
     if take:
-        # Der Rahmen entsteht in zusammenhaengenden Stuecken mit ein paar Luecken
+        # the border is built in connected runs with a few gaps
         missing = nb - take
         g = 1 if missing == 0 else int(rng.integers(1, min(3, missing, take) + 1))
 
@@ -573,7 +573,7 @@ def choose_filled(cols, rows, frac, rng):
 
 
 def board_quad(w, h, k, scene_w, scene_h, rng, margin=30):
-    """Lage des gelegten Puzzles: Drehung bis 20 Grad, leichte Perspektive, an eine Seite geschoben."""
+    """Pose of the assembled puzzle: rotation up to 20 degrees, slight perspective, pushed to one side."""
     s = 1.0
     while True:
         for _ in range(60):
@@ -621,7 +621,7 @@ def draw_debug(scene, truth, puzzle, hb):
     return img
 
 
-# ---------------------------------------------------------------- Hauptprogramm
+# ---------------------------------------------------------------- Main
 
 
 def parse_args():
@@ -633,16 +633,18 @@ def parse_args():
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--out', required=True)
     ap.add_argument('--mode', choices=['loose', 'partial'], default='loose')
-    ap.add_argument('--loose', type=int, help='Anzahl loser Teile (Standard: alle, die Platz haben)')
-    ap.add_argument('--filled', type=float, default=0.5, help='Anteil gelegter Zellen (partial)')
-    ap.add_argument('--piece-px', type=float, default=110, help='Kantenlaenge des Teilkerns in Szenenpixeln')
+    ap.add_argument('--loose', type=int, help='number of loose pieces (default: all that fit)')
+    ap.add_argument('--filled', type=float, default=0.5, help='fraction of filled cells (partial)')
+    ap.add_argument(
+        '--piece-px', type=float, default=110, help='edge length of the piece core in scene pixels'
+    )
     ap.add_argument('--size', default='2400x1800')
     ap.add_argument('--table', choices=['wood', 'cloth', 'plain', 'dark'], default='wood')
-    ap.add_argument('--rot90', action='store_true', help='nur Vielfache von 90 Grad (+-8 Grad)')
-    ap.add_argument('--debug', action='store_true', help='debug.png mit eingezeichneter Wahrheit')
+    ap.add_argument('--rot90', action='store_true', help='only multiples of 90 degrees (+-8 degrees)')
+    ap.add_argument('--debug', action='store_true', help='debug.png with ground truth drawn in')
     a = ap.parse_args()
     if (a.cols is None) != (a.rows is None):
-        ap.error('--cols und --rows nur gemeinsam')
+        ap.error('--cols and --rows only together')
     return a
 
 
@@ -671,7 +673,7 @@ def main():
         hb = homography(np.array([[0, 0], [w, 0], [w, h], [0, h]], float), quad)
         filled = choose_filled(cols, rows, args.filled, rng)
 
-    # Vorskaliertes Bild mit Randpuffer, damit Rand-Teile keine schwarzen Saeume bekommen
+    # prescaled image with edge padding so border pieces get no black seams
     sw, sh = max(1, round(w * k)), max(1, round(h * k))
     pad = 8
     small = np.asarray(pic.resize((sw, sh), Image.LANCZOS))
@@ -700,7 +702,7 @@ def main():
         order = order[: args.loose]
     loose, dropped = place_loose(order, puzzle, src, aq, k, placer, canvas, rng, args.rot90)
     if not canvas.min_gap_ok(GAP):
-        raise RuntimeError('Mindestabstand verletzt')
+        raise RuntimeError('minimum gap violated')
 
     scene = photo_finish(canvas.render(), rng)
     scene.save(out / 'scene.jpg', quality=85)
@@ -718,11 +720,11 @@ def main():
         'notPlaced': [list(rc) for rc in sorted(dropped)],
         'filled': [list(rc) for rc in filled],
         'referenceQuad': np.round(ref_quad, 2).tolist(),
-        # gejitterte Gitterecken in reference_clean-Pixeln, [zeile][spalte] = [x, y]
+        # jittered grid corners in reference_clean pixels, [row][col] = [x, y]
         'gridPoints': np.round(puzzle.pts, 3).tolist(),
-        # h[i][c]: Kante zwischen Zeile i und i+1 in Spalte c; v[r][j]: zwischen Spalte j und j+1 in Zeile r.
-        # +1 = Nase zeigt nach +y (unten) bzw. +x (rechts), d. h. das Teil mit dem kleineren Index
-        # hat die Nase, das andere das Loch; -1 umgekehrt. Bezug ist das unverdrehte Bild.
+        # h[i][c]: edge between row i and i+1 in column c; v[r][j]: between column j and j+1 in row r.
+        # +1 = tab points to +y (down) or +x (right), i.e. the piece with the smaller index
+        # has the tab, the other the hole; -1 the other way round. Relative to the unrotated image.
         'edges': puzzle.edge_signs(),
     }
     if hb is not None:
@@ -731,12 +733,12 @@ def main():
     if args.debug:
         draw_debug(scene, truth, puzzle, hb).save(out / 'debug.png')
 
-    msg = f'{cols}x{rows}={cols * rows} Teile, {len(loose)} lose'
+    msg = f'{cols}x{rows}={cols * rows} pieces, {len(loose)} loose'
     if filled:
-        msg += f', {len(filled)} gelegt'
+        msg += f', {len(filled)} filled'
     if dropped:
-        msg += f', {len(dropped)} passten nicht auf den Tisch'
-    print(f'{msg}, Teilgroesse {k * puzzle.side:.0f} px, {time.perf_counter() - t_start:.1f} s -> {out}')
+        msg += f', {len(dropped)} did not fit on the table'
+    print(f'{msg}, piece size {k * puzzle.side:.0f} px, {time.perf_counter() - t_start:.1f} s -> {out}')
 
 
 if __name__ == '__main__':

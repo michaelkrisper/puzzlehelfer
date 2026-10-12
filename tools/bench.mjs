@@ -1,4 +1,4 @@
-// Auswertung über mehrere Szenen aus tools/synth.py, eine Zeile je Szene.
+// Evaluation over several scenes from tools/synth.py, one line per scene.
 // node tools/bench.mjs DIR... [--clean | --badref [--truth-quad]]
 import { evaluate } from './eval.mjs';
 
@@ -13,13 +13,13 @@ for (const dir of dirs) {
       truthQuad: args.includes('--truth-quad'),
     });
     for (const k of Object.keys(sum)) sum[k] += r[k];
-    const b = r.board ? `${r.board.filled}/${r.board.truthFilled} falsch ${r.board.filledWrong}` : '-';
+    const b = r.board ? `${r.board.filled}/${r.board.truthFilled} wrong ${r.board.filledWrong}` : '-';
     console.log(
-      `${dir.split('/').pop().padEnd(26)} ${r.grid.padEnd(6)} lose ${String(r.loose).padStart(4)}  erkannt ${String(r.detected).padStart(4)}  Ecken ${String(r.cornerOk).padStart(4)}  Platz+Dreh ${String(r.cellRotOk).padStart(4)}  sicher ${String(r.accepted).padStart(4)} davon richtig ${String(r.acceptedOk).padStart(4)}  Brett ${b}  ${((r.ms.ref + r.ms.scene + r.ms.solve) / 1000).toFixed(1)} s`,
+      `${dir.split('/').pop().padEnd(26)} ${r.grid.padEnd(6)} loose ${String(r.loose).padStart(4)}  detected ${String(r.detected).padStart(4)}  corners ${String(r.cornerOk).padStart(4)}  place+rot ${String(r.cellRotOk).padStart(4)}  sure ${String(r.accepted).padStart(4)} of which right ${String(r.acceptedOk).padStart(4)}  board ${b}  ${((r.ms.ref + r.ms.scene + r.ms.solve) / 1000).toFixed(1)} s`,
     );
   } catch (err) {
-    console.log(`${dir.split('/').pop().padEnd(26)} FEHLER ${String(err?.stack ?? err).slice(0, 300)}`);
+    console.log(`${dir.split('/').pop().padEnd(26)} ERROR ${String(err?.stack ?? err).slice(0, 300)}`);
   }
 }
-console.log('Summe', JSON.stringify(sum));
+console.log('total', JSON.stringify(sum));
 process.exit(0);

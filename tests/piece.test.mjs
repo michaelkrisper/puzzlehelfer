@@ -7,8 +7,8 @@ require('../core/geom.js');
 require('../core/piece.js');
 const { geom, piece } = globalThis.PH;
 
-// Umriss eines Teils: Seitenarten t (1 Nase, -1 Loch, 0 glatt) für oben,
-// rechts, unten, links; Kantenlänge S, gedreht um deg im Uhrzeigersinn.
+// Outline of a piece: side types t (1 tab, -1 hole, 0 flat) for top, right,
+// bottom, left; edge length S, rotated by deg clockwise.
 function outline(t, S, deg, cx = 300, cy = 300) {
   const sq = [
     [0, 0],
@@ -25,7 +25,7 @@ function outline(t, S, deg, cx = 300, cy = 300) {
       const c = [0.5, 0.2 * s];
       const a0 = Math.atan2(0.1 * s - c[1], 0.44 - c[0]);
       const a1 = Math.atan2(0.1 * s - c[1], 0.56 - c[0]);
-      // um die Außenseite herum, also über den Scheitel
+      // around the outside, i.e. over the apex
       let da = a1 - a0;
       if (s > 0 && da > 0) da -= 2 * Math.PI;
       if (s < 0 && da < 0) da += 2 * Math.PI;
@@ -51,22 +51,22 @@ function outline(t, S, deg, cx = 300, cy = 300) {
 }
 
 for (const deg of [0, 17, 45, 133, 260]) {
-  test(`Ecken und Seiten bei ${deg}°`, () => {
+  test(`corners and sides at ${deg}°`, () => {
     const t = [1, -1, 0, 1];
     const res = piece.analyzeContour(outline(t, 120, deg));
-    assert.ok(res, 'Teil erkannt');
-    assert.ok(res.quality > 0.6, `Qualität ${res.quality}`);
-    assert.ok(Math.abs(res.side - 120) < 4, `Seite ${res.side}`);
-    // Seiten in Konturreihenfolge, Startecke beliebig: zyklisch vergleichen.
+    assert.ok(res, 'piece detected');
+    assert.ok(res.quality > 0.6, `quality ${res.quality}`);
+    assert.ok(Math.abs(res.side - 120) < 4, `side ${res.side}`);
+    // Sides in contour order, any start corner: compare cyclically.
     const types = res.sides.map((s) => s.type);
     const shift = [0, 1, 2, 3].find((k) => t.every((v, i) => types[(i + k) % 4] === v));
-    assert.notEqual(shift, undefined, `Seiten ${types}`);
+    assert.notEqual(shift, undefined, `sides ${types}`);
     const angle = geom.wrapDeg(res.angle - deg + shift * 90);
-    assert.ok(Math.abs(angle) < 2, `Winkel ${res.angle}`);
+    assert.ok(Math.abs(angle) < 2, `angle ${res.angle}`);
   });
 }
 
-test('Gegenstücke passen, gleiche Seiten nicht', () => {
+test('counterparts match, equal sides do not', () => {
   const a = piece.analyzeContour(outline([1, 0, 0, 0], 100, 0));
   const b = piece.analyzeContour(outline([0, 0, -1, 0], 100, 0));
   const c = piece.analyzeContour(outline([1, 0, 0, 0], 100, 0));
@@ -75,7 +75,7 @@ test('Gegenstücke passen, gleiche Seiten nicht', () => {
   assert.equal(piece.sideDistance(top(a), top(c)), Infinity);
 });
 
-test('Raster aus Teilezahl', () => {
+test('grid from piece count', () => {
   for (const [n, asp] of [
     [1000, 70 / 50],
     [500, 49 / 36],
@@ -89,7 +89,7 @@ test('Raster aus Teilezahl', () => {
   assert.equal(g.cols * g.rows, 100);
 });
 
-test('Homographie bildet Ecken ab', () => {
+test('homography maps corners', () => {
   const src = [
     [0, 0],
     [1, 0],
