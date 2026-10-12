@@ -7,6 +7,8 @@
   modules (6.6 MB instead of 11), feature points detected once per photo,
   nearest-neighbour matching in an own SIMD module (`wasm/knn.c`), reference
   feature points kept across −/+ and app restarts.
+- Finished part: RANSAC with more iterations, and BRISK pairs besides SIFT,
+  so the fit no longer depends on chance.
 - Feature points (SIFT, BRISK) locate pieces directly in the reference,
   regardless of their shape, and act as a strong vote in the assignment.
   OpenCV.js is now a custom build with SIFT (see `vendor/README.md`).

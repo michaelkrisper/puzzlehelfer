@@ -282,31 +282,34 @@
   }
 
   // Point pairs reference (ref.hi coordinates) ↔ photo inside a mask, after
-  // the ratio test. For large areas (finished part) the strongest SIFT points
-  // are enough.
-  function matchToReference(cv, ref, sf, mask, cap = 5000) {
+  // the ratio test. For large areas (finished part) the strongest points per
+  // detector are enough; BRISK adds pairs where SIFT alone leaves the fit
+  // shaky.
+  function matchToReference(cv, ref, sf, mask, caps = { SIFT: 5000, BRISK: 3000 }) {
     const pairs = [];
-    const s = sf.sets.find((x) => x.name === 'SIFT');
-    const r = ref.feat?.find((f) => f.name === 'SIFT');
-    if (!s || !r?.rows) return pairs;
     const md = mask.data;
     const w = mask.cols;
-    const idx = [];
-    for (let i = 0; i < s.pts.length / 2; i++) {
-      const x = Math.round(s.pts[i * 2]);
-      const y = Math.round(s.pts[i * 2 + 1]);
-      if (x >= 0 && y >= 0 && x < w && y < mask.rows && md[y * w + x]) idx.push(i);
-    }
-    idx.sort((a, b) => s.resp[b] - s.resp[a]);
-    idx.length = Math.min(idx.length, cap);
-    matchPoints(cv, ref, s, idx);
-    for (const i of idx) {
-      const j = s.best[i];
-      if (j >= 0)
-        pairs.push([
-          [r.pts[j * 2], r.pts[j * 2 + 1]],
-          [s.pts[i * 2], s.pts[i * 2 + 1]],
-        ]);
+    for (const s of sf.sets) {
+      const r = ref.feat?.find((f) => f.name === s.name);
+      const cap = caps[s.name] ?? 0;
+      if (!r?.rows || !cap) continue;
+      const idx = [];
+      for (let i = 0; i < s.pts.length / 2; i++) {
+        const x = Math.round(s.pts[i * 2]);
+        const y = Math.round(s.pts[i * 2 + 1]);
+        if (x >= 0 && y >= 0 && x < w && y < mask.rows && md[y * w + x]) idx.push(i);
+      }
+      idx.sort((a, b) => s.resp[b] - s.resp[a]);
+      idx.length = Math.min(idx.length, cap);
+      matchPoints(cv, ref, s, idx);
+      for (const i of idx) {
+        const j = s.best[i];
+        if (j >= 0)
+          pairs.push([
+            [r.pts[j * 2], r.pts[j * 2 + 1]],
+            [s.pts[i * 2], s.pts[i * 2 + 1]],
+          ]);
+      }
     }
     return pairs;
   }

@@ -99,8 +99,10 @@
     );
     const inl = new cv.Mat();
     // Generous, so bent areas are not dropped as outliers; the correction pulls
-    // them in afterwards.
-    const Hm = cv.findHomography(am, bm, cv.RANSAC, 12, inl);
+    // them in afterwards. Many iterations and a high confidence: with the
+    // defaults RANSAC stops early and one changed pair decides between the
+    // best and a clearly worse fit.
+    const Hm = cv.findHomography(am, bm, cv.RANSAC, 12, inl, 20000, 0.9999);
     let H = null;
     const use = [];
     for (let i = 0; i < inl.rows; i++) if (inl.data[i]) use.push(pairs[i]);
