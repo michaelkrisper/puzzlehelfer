@@ -10,10 +10,9 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
 
 export async function loadCore() {
-  const cv = require(join(root, 'vendor/opencv.js'));
-  if (!cv.Mat) await new Promise((r) => (cv.onRuntimeInitialized = r));
-  delete cv.then;
-  for (const f of ['geom', 'piece', 'segment', 'reference', 'match', 'board', 'feature', 'pipeline'])
+  const p = require(join(root, 'vendor/opencv.js'));
+  const cv = await new Promise((r) => p.then(r));
+  for (const f of ['geom', 'piece', 'segment', 'reference', 'match', 'board', 'knn', 'feature', 'pipeline'])
     require(join(root, `core/${f}.js`));
   return { cv, PH: globalThis.PH };
 }

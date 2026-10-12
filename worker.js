@@ -1,4 +1,4 @@
-// Image recognition runs in the background so the 10 MB OpenCV blocks the UI
+// Image recognition runs in the background so the 6.6 MB OpenCV blocks the UI
 // neither while loading nor while computing. Reference and scenes live here.
 importScripts(
   'vendor/opencv.js',
@@ -8,16 +8,14 @@ importScripts(
   'core/reference.js',
   'core/match.js',
   'core/board.js',
+  'core/knn.js',
   'core/feature.js',
   'core/pipeline.js',
 );
 
-const ready = new Promise((resolve) => {
-  if (self.cv.Mat) resolve();
-  else self.cv.onRuntimeInitialized = resolve;
-}).then(() => {
-  // The Emscripten module is "thenable" and would block every await.
-  delete self.cv.then;
+// opencv.js sets cv to a Promise of the module.
+const ready = new Promise((resolve) => self.cv.then(resolve)).then((m) => {
+  self.cv = m;
   postMessage({ type: 'ready' });
 });
 
@@ -30,11 +28,14 @@ const handlers = {
   quad({ image }) {
     return { quad: PH.reference.findPictureQuad(cv, image) };
   },
-  reference({ image, quad, cols, rows }) {
-    ref = PH.reference.buildReference(cv, image, quad, cols, rows);
+  reference({ image, quad, cols, rows, cache }) {
+    const prev = ref ?? cache;
+    ref = PH.reference.buildReference(cv, image, quad, cols, rows, prev);
     // Places depend on the grid, so old analyses no longer fit.
     scenes.clear();
-    return { rgba: ref.rgba.data, W: ref.W, H: ref.H, C: ref.C };
+    // New feature points go back to the app, which stores them.
+    const fresh = ref.feat !== prev?.feat ? { key: ref.key, feat: ref.feat } : null;
+    return { rgba: ref.rgba.data, W: ref.W, H: ref.H, C: ref.C, cache: fresh };
   },
   scene({ id, sceneId, image }) {
     if (!ref) throw new Error('Keine Vorlage');

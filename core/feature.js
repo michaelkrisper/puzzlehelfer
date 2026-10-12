@@ -32,12 +32,14 @@
       det.detectAndCompute(gray, m, kp, desc);
       const n = kp.size();
       const pts = new Float32Array(n * 2);
+      const resp = new Float32Array(n);
       for (let i = 0; i < n; i++) {
-        const p = kp.get(i).pt;
-        pts[i * 2] = p.x;
-        pts[i * 2 + 1] = p.y;
+        const k = kp.get(i);
+        pts[i * 2] = k.pt.x;
+        pts[i * 2 + 1] = k.pt.y;
+        resp[i] = k.response;
       }
-      out.push({ name: d.name, norm: d.norm(cv), pts, desc });
+      out.push({ name: d.name, norm: d.norm(cv), pts, resp, desc });
       if (!mask) m.delete();
       kp.delete();
       det.delete();
@@ -126,19 +128,80 @@
     };
   }
 
+  // All feature points of a photo, detected once and shared by the finished
+  // part, the loose pieces and the groups. Each point is matched against the
+  // reference only when someone asks for it, and only once.
+  function sceneFeatures(cv, gray, mask) {
+    const sets = detect(cv, gray, mask).map((s) => ({
+      ...s,
+      best: new Int32Array(s.pts.length / 2).fill(-2),
+    }));
+    return {
+      sets,
+      delete() {
+        for (const s of sets) s.desc.delete();
+      },
+    };
+  }
+
+  // Nearest reference point for the points idx of set s (ratio test), stored
+  // in s.best: index in the reference or -1.
+  function matchPoints(cv, ref, s, idx) {
+    const r = ref.feat?.find((f) => f.name === s.name);
+    const todo = idx.filter((i) => s.best[i] === -2);
+    if (!todo.length) return;
+    if (!r?.rows) {
+      for (const i of todo) s.best[i] = -1;
+      return;
+    }
+    const hamming = s.norm === cv.NORM_HAMMING;
+    // BRISK: 64 bytes; SIFT: 128 floats that are integers 0..255, as bytes.
+    const bytes = s.desc.cols;
+    if (PH.knn?.available() && bytes % 16 === 0 && bytes <= 256) {
+      r.u8 ??= hamming ? r.data : Uint8Array.from(r.data);
+      const src = hamming ? s.desc.data : s.desc.data32F;
+      const q = new Uint8Array(todo.length * bytes);
+      todo.forEach((i, k) => {
+        q.set(src.subarray(i * bytes, (i + 1) * bytes), k * bytes);
+      });
+      const res = PH.knn.knn2(hamming ? 'hamming' : 'l2', q, todo.length, r.u8, r.rows, bytes);
+      // Ratio test 0.8 on the distance, for L2 on its square.
+      const ratio = hamming ? 0.8 : 0.64;
+      todo.forEach((i, k) => {
+        const d2 = res[k * 3 + 2];
+        s.best[i] = d2 !== 0xffffffff && res[k * 3 + 1] < ratio * d2 ? res[k * 3] : -1;
+      });
+      return;
+    }
+    const q = new cv.Mat(todo.length, s.desc.cols, s.desc.type());
+    // Views into WASM memory only after the last allocation.
+    const row = s.desc.data.length / s.desc.rows;
+    const src = s.desc.data;
+    const dst = q.data;
+    todo.forEach((i, k) => {
+      dst.set(src.subarray(i * row, (i + 1) * row), k * row);
+    });
+    const rd = cv.matFromArray(r.rows, r.cols, r.type, r.data);
+    const bf = new cv.BFMatcher(s.norm, false);
+    const mm = new cv.DMatchVectorVector();
+    bf.knnMatch(q, rd, mm, 2);
+    for (const i of todo) s.best[i] = -1;
+    for (let k = 0; k < mm.size(); k++) {
+      const pr = mm.get(k);
+      if (pr.size() < 2) continue;
+      const m0 = pr.get(0);
+      if (m0.distance < 0.8 * pr.get(1).distance) s.best[todo[m0.queryIdx]] = m0.trainIdx;
+    }
+    for (const m of [q, rd, bf, mm]) m.delete();
+  }
+
   // For every piece (outline in the photo) its position in the reference, if
   // feature points show it clearly. Result per piece null or
   // {cell, rot, inliers, angle, at, toRef}. shapes[i]: corners and angle of
   // the piece, or null (then no grid rotation, only place and angle).
-  function locatePieces(cv, ref, sceneGray, contours, shapes) {
+  // sf: sceneFeatures of the photo.
+  function locatePieces(cv, ref, sf, contours, shapes) {
     if (!ref.feat?.length) return contours.map(() => null);
-    const mask = cv.Mat.zeros(sceneGray.rows, sceneGray.cols, cv.CV_8UC1);
-    for (const c of contours) PH.segment.drawPoly(cv, mask, c);
-    const k = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5, 5));
-    cv.dilate(mask, mask, k);
-    k.delete();
-    const scene = detect(cv, sceneGray, mask);
-    mask.delete();
     const bbox = contours.map((c) => {
       let x0 = Infinity;
       let y0 = Infinity;
@@ -154,14 +217,12 @@
     });
     // Point pairs per piece, collected over both detectors.
     const pairs = contours.map(() => ({ a: [], b: [] }));
-    for (const s of scene) {
+    for (const s of sf.sets) {
       const r = ref.feat.find((f) => f.name === s.name);
       const n = s.pts.length / 2;
-      if (!r || !n || !r.rows) {
-        s.desc.delete();
-        continue;
-      }
+      if (!r?.rows || !n) continue;
       const owner = new Int32Array(n).fill(-1);
+      const idx = [];
       for (let i = 0; i < n; i++) {
         const x = s.pts[i * 2];
         const y = s.pts[i * 2 + 1];
@@ -170,28 +231,18 @@
           if (x < b[0] || y < b[1] || x > b[2] || y > b[3]) continue;
           if (pointInPoly(x, y, contours[p])) {
             owner[i] = p;
+            idx.push(i);
             break;
           }
         }
       }
-      const rd = cv.matFromArray(r.rows, r.cols, r.type, r.data);
-      const bf = new cv.BFMatcher(s.norm, false);
-      const mm = new cv.DMatchVectorVector();
-      bf.knnMatch(s.desc, rd, mm, 2);
-      for (let i = 0; i < mm.size(); i++) {
-        const pr = mm.get(i);
-        if (pr.size() < 2) continue;
-        const m0 = pr.get(0);
-        const m1 = pr.get(1);
-        const p = owner[m0.queryIdx];
-        if (p < 0 || m0.distance >= 0.8 * m1.distance) continue;
-        pairs[p].a.push([s.pts[m0.queryIdx * 2], s.pts[m0.queryIdx * 2 + 1]]);
-        pairs[p].b.push([r.pts[m0.trainIdx * 2], r.pts[m0.trainIdx * 2 + 1]]);
+      matchPoints(cv, ref, s, idx);
+      for (const i of idx) {
+        const j = s.best[i];
+        if (j < 0) continue;
+        pairs[owner[i]].a.push([s.pts[i * 2], s.pts[i * 2 + 1]]);
+        pairs[owner[i]].b.push([r.pts[j * 2], r.pts[j * 2 + 1]]);
       }
-      mm.delete();
-      bf.delete();
-      rd.delete();
-      s.desc.delete();
     }
     const { hi, W, H, C, cols, rows } = ref;
     const tol = Math.max(3, (hi.w / cols) * 0.06);
@@ -233,33 +284,39 @@
   // Point pairs reference (ref.hi coordinates) ↔ photo inside a mask, after
   // the ratio test. For large areas (finished part) the strongest SIFT points
   // are enough.
-  function matchToReference(cv, ref, gray, mask) {
+  function matchToReference(cv, ref, sf, mask, cap = 5000) {
     const pairs = [];
-    for (const s of detect(cv, gray, mask, false, ['SIFT'], 5000)) {
-      const r = ref.feat?.find((f) => f.name === s.name);
-      if (r?.rows && s.desc.rows) {
-        const rd = cv.matFromArray(r.rows, r.cols, r.type, r.data);
-        const bf = new cv.BFMatcher(s.norm, false);
-        const mm = new cv.DMatchVectorVector();
-        bf.knnMatch(s.desc, rd, mm, 2);
-        for (let i = 0; i < mm.size(); i++) {
-          const pr = mm.get(i);
-          if (pr.size() < 2) continue;
-          const m0 = pr.get(0);
-          if (m0.distance >= 0.8 * pr.get(1).distance) continue;
-          pairs.push([
-            [r.pts[m0.trainIdx * 2], r.pts[m0.trainIdx * 2 + 1]],
-            [s.pts[m0.queryIdx * 2], s.pts[m0.queryIdx * 2 + 1]],
-          ]);
-        }
-        mm.delete();
-        bf.delete();
-        rd.delete();
-      }
-      s.desc.delete();
+    const s = sf.sets.find((x) => x.name === 'SIFT');
+    const r = ref.feat?.find((f) => f.name === 'SIFT');
+    if (!s || !r?.rows) return pairs;
+    const md = mask.data;
+    const w = mask.cols;
+    const idx = [];
+    for (let i = 0; i < s.pts.length / 2; i++) {
+      const x = Math.round(s.pts[i * 2]);
+      const y = Math.round(s.pts[i * 2 + 1]);
+      if (x >= 0 && y >= 0 && x < w && y < mask.rows && md[y * w + x]) idx.push(i);
+    }
+    idx.sort((a, b) => s.resp[b] - s.resp[a]);
+    idx.length = Math.min(idx.length, cap);
+    matchPoints(cv, ref, s, idx);
+    for (const i of idx) {
+      const j = s.best[i];
+      if (j >= 0)
+        pairs.push([
+          [r.pts[j * 2], r.pts[j * 2 + 1]],
+          [s.pts[i * 2], s.pts[i * 2 + 1]],
+        ]);
     }
     return pairs;
   }
 
-  PH.feature = { describeReference, locatePieces, matchToReference, ransacSimilarity, pointInPoly };
+  PH.feature = {
+    describeReference,
+    sceneFeatures,
+    locatePieces,
+    matchToReference,
+    ransacSimilarity,
+    pointInPoly,
+  };
 })();

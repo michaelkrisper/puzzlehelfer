@@ -214,7 +214,7 @@
     return { data: out, w: bw, h: bh };
   }
 
-  function buildReference(cv, img, quad, cols, rows) {
+  function buildReference(cv, img, quad, cols, rows, prev = null) {
     const C = cellSizeFor(cols, rows);
     const W = cols * C;
     const H = rows * C;
@@ -233,8 +233,13 @@
     for (let i = 0; i < gray.length; i++)
       gray[i] = Math.round(0.299 * hr.data[i * 4] + 0.587 * hr.data[i * 4 + 1] + 0.114 * hr.data[i * 4 + 2]);
     const hi = { gray, w: hw, h: hh };
-    const feat = PH.feature ? PH.feature.describeReference(cv, hi) : [];
-    return { cols, rows, C, G, W, H, rgba, lab, blocks, cellAspect, hi, feat };
+    // The high-resolution copy does not depend on the grid: on −/+ or after a
+    // restart the (expensive) feature points stay valid. prev: an earlier
+    // reference or a stored {key, feat}.
+    let key = (hw * 31 + hh) >>> 0;
+    for (let i = 0; i < gray.length; i++) key = Math.imul(key ^ gray[i], 16777619) >>> 0;
+    const feat = prev?.key === key ? prev.feat : PH.feature ? PH.feature.describeReference(cv, hi) : [];
+    return { cols, rows, C, G, W, H, rgba, lab, blocks, cellAspect, hi, feat, key };
   }
 
   PH.reference = { findPictureQuad, buildReference, rectify, blockMeans, cellSizeFor, orderQuad, G };

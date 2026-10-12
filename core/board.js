@@ -15,7 +15,7 @@
 
   // Point pairs reference (grid coordinates) ↔ photo in the finished part.
   // With the reference features (SIFT) if available, otherwise ORB.
-  function boardPairs(cv, ref, sceneGray, bigMask) {
+  function boardPairs(cv, ref, sceneGray, bigMask, sf) {
     const m = new cv.Mat();
     const k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(15, 15));
     cv.dilate(bigMask, m, k);
@@ -24,8 +24,8 @@
     const sx = hi.w / ref.W;
     const sy = hi.h / ref.H;
     let pairs = [];
-    if (PH.feature && ref.feat?.length) {
-      pairs = PH.feature.matchToReference(cv, ref, sceneGray, m).map(([[x, y], q]) => [[x / sx, y / sy], q]);
+    if (sf && ref.feat?.length) {
+      pairs = PH.feature.matchToReference(cv, ref, sf, m).map(([[x, y], q]) => [[x / sx, y / sy], q]);
     } else {
       let refGray;
       if (hi.gray) {
@@ -82,8 +82,8 @@
   }
 
   // Returns H (reference pixel → photo pixel) with correction corr, or null.
-  function homographyToScene(cv, ref, sceneGray, bigMask) {
-    const pairs = boardPairs(cv, ref, sceneGray, bigMask);
+  function homographyToScene(cv, ref, sceneGray, bigMask, sf) {
+    const pairs = boardPairs(cv, ref, sceneGray, bigMask, sf);
     if (pairs.length < 12) return null;
     const am = cv.matFromArray(
       pairs.length,
@@ -311,8 +311,9 @@
     };
   }
 
-  function registerBoard(cv, ref, sceneMat, sceneGray, bigMask) {
-    const hit = homographyToScene(cv, ref, sceneGray, bigMask);
+  // sf: feature points of the photo (PH.feature.sceneFeatures), or null.
+  function registerBoard(cv, ref, sceneMat, sceneGray, bigMask, sf = null) {
+    const hit = homographyToScene(cv, ref, sceneGray, bigMask, sf);
     if (!hit) return null;
     const { H, corr } = hit;
     const { C, G, W, cols, rows } = ref;

@@ -74,7 +74,7 @@
   // searched as a whole in the reference with feature points. Returns per
   // group outline, occupied places, anchor place, rotation and target in the
   // photo.
-  function locateGroups(cv, ref, src, big, board) {
+  function locateGroups(cv, ref, sf, big, board) {
     const { C, cols, rows } = ref;
     const Hi = board && PH.geom.invertH(board.H);
     // Blobs that the board maps onto occupied places are the board itself and
@@ -93,16 +93,13 @@
     };
     const cand = big.map((b) => ({ b, out: simplify(b.contour, 3) })).filter((x) => !onBoard(x.out));
     if (!cand.length) return [];
-    const gray = new cv.Mat();
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
     const loc = PH.feature.locatePieces(
       cv,
       ref,
-      gray,
+      sf,
       cand.map((x) => x.out),
       cand.map(() => null),
     );
-    gray.delete();
     const outs = cand.map((x) => x.out);
     const groups = [];
     cand.forEach(({ b }, i) => {
@@ -157,13 +154,26 @@
     progress('Teile werden vom Tisch getrennt …');
     const seg = PH.segment.segmentScene(cv, img, lab);
     const src = cv.matFromImageData(img);
+    const gray = new cv.Mat();
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    // Feature points once for everything that is not table.
+    let sf = null;
+    if (PH.feature && ref.feat?.length && (seg.pieces.length || seg.big.length)) {
+      progress('Merkmalspunkte werden gesucht …');
+      const m = new cv.Mat();
+      cv.bitwise_or(seg.mask, seg.bigMask, m);
+      // Groups inside the finished border are cleared from both masks.
+      for (const b of seg.big) PH.segment.drawPoly(cv, m, b.contour);
+      const k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(15, 15));
+      cv.dilate(m, m, k);
+      k.delete();
+      sf = PH.feature.sceneFeatures(cv, gray, m);
+      m.delete();
+    }
     let board = null;
     if (seg.big.length) {
-      const gray = new cv.Mat();
-      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
       progress('Fertiger Teil wird auf die Vorlage gelegt …');
-      board = PH.board.registerBoard(cv, ref, src, gray, seg.bigMask);
-      gray.delete();
+      board = PH.board.registerBoard(cv, ref, src, gray, seg.bigMask, sf);
     }
     const pieces = [];
     const unclear = [];
@@ -188,23 +198,22 @@
       const raw = PH.match.extractPatch(cv, src, seg.mask, shape.corners, ref.C, ref.G);
       pieces.push({ shape, raw, outline });
     }
-    if (PH.feature && pieces.length) {
+    if (sf && pieces.length) {
       progress('Merkmalspunkte werden verglichen …');
-      const gray = new cv.Mat();
-      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
       const loc = PH.feature.locatePieces(
         cv,
         ref,
-        gray,
+        sf,
         pieces.map((p) => p.outline),
         pieces.map((p) => p.shape),
       );
-      gray.delete();
       pieces.forEach((p, i) => {
         p.feat = loc[i];
       });
     }
-    const groups = PH.feature ? locateGroups(cv, ref, src, seg.big, board) : [];
+    const groups = sf ? locateGroups(cv, ref, sf, seg.big, board) : [];
+    sf?.delete();
+    gray.delete();
     // Too large blobs without a link to the reference are usually pieces lying
     // against each other.
     if (!board)

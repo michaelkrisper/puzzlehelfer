@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Much faster, above all on phones (Pixel 4a: about 16 s per photo instead
+  of about 2 min): OpenCV 4.14 with WebAssembly SIMD and only the needed
+  modules (6.6 MB instead of 11), feature points detected once per photo,
+  nearest-neighbour matching in an own SIMD module (`wasm/knn.c`), reference
+  feature points kept across −/+ and app restarts.
 - Feature points (SIFT, BRISK) locate pieces directly in the reference,
   regardless of their shape, and act as a strong vote in the assignment.
   OpenCV.js is now a custom build with SIFT (see `vendor/README.md`).

@@ -99,6 +99,7 @@ const state = {
   cols: 0,
   rows: 0,
   refView: null, // {canvas, W, H, C}
+  featCache: null, // feature points of the reference, see worker.js
   scenes: [], // {id, canvas, image, url, busy}
   current: null,
   result: null,
@@ -254,7 +255,12 @@ async function applyReference() {
     quad: state.quad,
     cols: state.cols,
     rows: state.rows,
+    cache: state.featCache,
   });
+  if (r.cache) {
+    state.featCache = r.cache;
+    store('feat', r.cache).catch((err) => console.warn(err));
+  }
   const c = document.createElement('canvas');
   c.width = r.W;
   c.height = r.H;
@@ -988,6 +994,7 @@ window.addEventListener('resize', () => {
       state.count = saved.count;
       state.cols = saved.cols;
       state.rows = saved.rows;
+      state.featCache = await load('feat');
       await applyReference();
     }
   } catch (err) {

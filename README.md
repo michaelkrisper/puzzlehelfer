@@ -138,8 +138,8 @@ After changing app files, bump `VERSION` in [`sw.js`](sw.js).
 - Puzzles with irregular cuts (no rows and columns) are not supported.
 - The grid is derived from the piece count assuming square pieces; for
   rectangular pieces set columns and rows with −/+.
-- Analysing a photo takes about a minute in a desktop browser and longer on
-  a phone; feature matching is the expensive part.
+- Analysing a photo takes about 15 s on a mid-range phone (Pixel 4a) and
+  needs WebAssembly SIMD (Chrome 91, Safari 16.4, Firefox 89 or newer).
 
 ## Contributing
 
