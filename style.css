@@ -27,6 +27,18 @@ body {
     Roboto,
     sans-serif;
   -webkit-tap-highlight-color: transparent;
+  /* Like a native app: the page scrolls but never zooms; only the photo
+     viewer zooms (app.js). */
+  touch-action: pan-x pan-y;
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+}
+
+canvas,
+button {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 header {

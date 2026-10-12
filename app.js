@@ -860,6 +860,17 @@ vc.addEventListener(
 );
 vc.style.touchAction = 'pan-y';
 
+// No page zoom: Safari ignores user-scalable=no and touch-action for pinch,
+// desktop browsers zoom on ctrl+wheel (trackpad pinch).
+for (const t of ['gesturestart', 'gesturechange']) document.addEventListener(t, (e) => e.preventDefault());
+document.addEventListener(
+  'wheel',
+  (e) => {
+    if (e.ctrlKey) e.preventDefault();
+  },
+  { passive: false },
+);
+
 function snapshot() {
   const ps = [...view.pointers.values()];
   const n = ps.length;
