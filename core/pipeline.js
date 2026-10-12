@@ -1,5 +1,6 @@
-// Ablauf: Foto zerlegen → Teile vermessen → mit der Vorlage vergleichen →
-// zuordnen. Gemeinsam für Worker und Node-Werkzeuge.
+// Flow: split the photo → measure pieces → compare with the reference →
+// assign. Shared by the worker and the Node tools. Progress messages are
+// shown to users and therefore German.
 (() => {
   globalThis.PH ??= {};
   const PH = globalThis.PH;
@@ -25,9 +26,9 @@
     return out;
   }
 
-  // Alle Pixelgrößen der Erkennung (Glättung, Rauschen, Schwellen) sind auf
-  // Teile mit rund 90 px Kantenlänge abgestimmt. Ein grober Vorlauf misst die
-  // Teilgröße, danach wird das Foto passend verkleinert, nie vergrößert.
+  // All pixel sizes of the recognition (smoothing, noise, thresholds) are
+  // tuned to pieces of about 90 px side length. A coarse pre-pass measures
+  // the piece size, then the photo is scaled down to fit, never up.
   const TARGET_SIDE = 90;
   function workScale(cv, img) {
     const f0 = Math.min(1, 1400 / Math.max(img.width, img.height));
@@ -36,16 +37,115 @@
       cv,
       small,
       PH.segment.rgbaToLab(small.data, small.width * small.height),
-      {
-        refine: false,
-      },
+      { refine: false, outlines: false },
     );
     seg.mask.delete();
     seg.bigMask.delete();
     if (!seg.pieceArea) return 1;
-    // Fläche eines Teils ≈ Kernquadrat; Nasen und Löcher gleichen sich aus.
+    // Area of a piece ≈ core square; knobs and holes balance out.
     const side = Math.sqrt(seg.pieceArea) / f0;
     return Math.min(1, TARGET_SIDE / side);
+  }
+
+  // Core size [long, short] of a piece at its position in the photo: table and
+  // finished part lie in one plane, so the board mapping knows the cell size
+  // there, perspective included. Null without a board.
+  function bodyPrior(board, ref, contour) {
+    if (!board) return null;
+    let x = 0;
+    let y = 0;
+    for (const [px, py] of contour) {
+      x += px;
+      y += py;
+    }
+    const [u, v] = PH.geom.applyH(PH.geom.invertH(board.H), x / contour.length, y / contour.length);
+    const h = ref.C / 2;
+    const d = (a, b) => {
+      const p = PH.board.toScene(board, ...a);
+      const q = PH.board.toScene(board, ...b);
+      return Math.hypot(q[0] - p[0], q[1] - p[1]);
+    };
+    const w = d([u - h, v], [u + h, v]);
+    const t = d([u, v - h], [u, v + h]);
+    return [Math.max(w, t), Math.min(w, t)];
+  }
+
+  // Joined groups: large blobs that are not part of the recognised board are
+  // searched as a whole in the reference with feature points. Returns per
+  // group outline, occupied places, anchor place, rotation and target in the
+  // photo.
+  function locateGroups(cv, ref, src, big, board) {
+    const { C, cols, rows } = ref;
+    const Hi = board && PH.geom.invertH(board.H);
+    // Blobs that the board maps onto occupied places are the board itself and
+    // need no (expensive) search of their own.
+    const filled = new Set(board?.filled ?? []);
+    const onBoard = (out) => {
+      if (!Hi) return false;
+      let n = 0;
+      for (const [x, y] of out) {
+        const [u, v] = PH.geom.applyH(Hi, x, y);
+        const c = Math.floor(u / C);
+        const r = Math.floor(v / C);
+        if (c >= 0 && r >= 0 && c < cols && r < rows && filled.has(r * cols + c)) n++;
+      }
+      return n > out.length * 0.5;
+    };
+    const cand = big.map((b) => ({ b, out: simplify(b.contour, 3) })).filter((x) => !onBoard(x.out));
+    if (!cand.length) return [];
+    const gray = new cv.Mat();
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    const loc = PH.feature.locatePieces(
+      cv,
+      ref,
+      gray,
+      cand.map((x) => x.out),
+      cand.map(() => null),
+    );
+    gray.delete();
+    const outs = cand.map((x) => x.out);
+    const groups = [];
+    cand.forEach(({ b }, i) => {
+      const f = loc[i];
+      if (!f || f.inliers < 10) return;
+      if (Hi) {
+        // If the blob lies where the board puts it, it belongs to the board.
+        let x = 0;
+        let y = 0;
+        for (const [px, py] of outs[i]) {
+          x += px;
+          y += py;
+        }
+        const [u, v] = PH.geom.applyH(Hi, x / outs[i].length, y / outs[i].length);
+        if (Math.hypot(u - f.at[0], v - f.at[1]) < C) return;
+      }
+      const poly = outs[i].map(([x, y]) => f.toRef(x, y));
+      const cells = [];
+      for (let r = 0; r < rows; r++)
+        for (let c = 0; c < cols; c++)
+          if (PH.feature.pointInPoly((c + 0.5) * C, (r + 0.5) * C, poly)) cells.push(r * cols + c);
+      if (!cells.length) return;
+      const row = Math.floor(f.cell / cols);
+      const col = f.cell % cols;
+      let psi = 0;
+      let target = null;
+      if (board) {
+        target = PH.board.toScene(board, (col + 0.5) * C, (row + 0.5) * C);
+        const t2 = PH.board.toScene(board, (col + 1.5) * C, (row + 0.5) * C);
+        psi = (Math.atan2(t2[1] - target[1], t2[0] - target[0]) * 180) / Math.PI;
+      }
+      groups.push({
+        big: b,
+        outline: outs[i],
+        cells,
+        row,
+        col,
+        turn: PH.geom.wrapDeg(f.angle + psi),
+        target,
+        inliers: f.inliers,
+      });
+    });
+    return groups;
   }
 
   function analyzeScene(cv, input, ref, progress = () => {}) {
@@ -69,10 +169,11 @@
     const unclear = [];
     progress('Teile werden vermessen …');
     for (const p of seg.pieces) {
-      let shape = p.touches ? null : PH.piece.analyzeContour(p.contour);
+      const prior = p.touches ? null : bodyPrior(board, ref, p.contour);
+      let shape = p.touches ? null : PH.piece.analyzeContour(p.contour, prior);
       let contour = p.contour;
       if (!p.touches && p.alt) {
-        const s2 = PH.piece.analyzeContour(p.alt);
+        const s2 = PH.piece.analyzeContour(p.alt, prior);
         if (s2 && (!shape || s2.quality > shape.quality)) {
           shape = s2;
           contour = p.alt;
@@ -87,18 +188,38 @@
       const raw = PH.match.extractPatch(cv, src, seg.mask, shape.corners, ref.C, ref.G);
       pieces.push({ shape, raw, outline });
     }
-    // Zu große Flecken ohne Vorlagenbezug sind meist aneinanderliegende Teile.
+    if (PH.feature && pieces.length) {
+      progress('Merkmalspunkte werden verglichen …');
+      const gray = new cv.Mat();
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+      const loc = PH.feature.locatePieces(
+        cv,
+        ref,
+        gray,
+        pieces.map((p) => p.outline),
+        pieces.map((p) => p.shape),
+      );
+      gray.delete();
+      pieces.forEach((p, i) => {
+        p.feat = loc[i];
+      });
+    }
+    const groups = PH.feature ? locateGroups(cv, ref, src, seg.big, board) : [];
+    // Too large blobs without a link to the reference are usually pieces lying
+    // against each other.
     if (!board)
       for (const b of seg.big)
-        unclear.push({ outline: simplify(b.contour, 3), area: b.area, reason: 'merged' });
+        if (!groups.some((g) => g.big === b))
+          unclear.push({ outline: simplify(b.contour, 3), area: b.area, reason: 'merged' });
+    for (const g of groups) delete g.big;
     src.delete();
     seg.mask.delete();
     seg.bigMask.delete();
-    return { width: w, height: h, scale, pieces, unclear, board, pieceArea: seg.pieceArea };
+    return { width: w, height: h, scale, pieces, unclear, groups, board, pieceArea: seg.pieceArea };
   }
 
-  // Farbangleich ohne fertiges Puzzle: die losen Teile sind eine Stichprobe
-  // des Motivs, ihre Farbstatistik sollte der Vorlage ähneln.
+  // Colour fit without a finished puzzle: the loose pieces are a sample of the
+  // motif, their colour statistics should resemble the reference.
   function statsColor(pieces, ref) {
     const acc = [0, 1, 2].map(() => [0, 0]);
     let n = 0;
@@ -124,13 +245,13 @@
     }
     const m = Math.ceil(N / 7);
     const wgt = Math.min(1, pieces.length / 25);
-    // Nur die Mittelwerte angleichen: Die Streuung der Vorlage hängt an ihrer
-    // Schärfe (ein unscharfes Schachtelfoto hat weniger Kontrast im Detail),
-    // ein Kontrastabgleich würde die Teile dann fälschlich stauchen.
+    // Only fit the means: the spread of the reference depends on its sharpness
+    // (a blurry box photo has less detail contrast), a contrast fit would then
+    // wrongly compress the pieces.
     return [0, 1, 2].map((c) => [1, (rs[c][0] / m - acc[c][0] / n) * wgt]);
   }
 
-  // Neuer Farbangleich aus sicheren Zuordnungen (Blockmittel Teil ↔ Vorlage).
+  // New colour fit from sure assignments (block means piece ↔ reference).
   function refitColor(items, ref, result) {
     const pairs = [];
     const { G, cols, blocks } = ref;
@@ -157,25 +278,40 @@
     return PH.board.fitColor(pairs);
   }
 
+  // Rectangular pieces only fit with the long side along the long cell side;
+  // the rotation is then fixed up to 180°.
+  function allowedRots(shape, ref) {
+    const ka = ref.cellAspect ?? 1;
+    if (Math.abs(Math.log(ka)) < 0.12) return null;
+    const [a, b, c] = shape.corners;
+    const w = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const h = Math.hypot(c[0] - b[0], c[1] - b[1]);
+    if (Math.abs(Math.log(w / h)) < 0.1) return null;
+    const flat = w > h === ka > 1;
+    return [flat, !flat, flat, !flat];
+  }
+
   function runAssign(items, ref, colors, ctx, progress) {
     for (const [n, it] of items.entries()) {
       if (n % 10 === 0) progress(`Vergleich mit der Vorlage: Teil ${n + 1} von ${items.length} …`);
       it.prep = PH.match.preparePiece(it.raw, ref.C, ref.G, colors[it.scene]);
-      it.cands = PH.match.candidates(it.prep, it.sides, ref, ctx.free);
+      it.prep.allowRot = allowedRots(it.shape, ref);
+      const must = it.feat && it.feat.rot !== null ? [it.feat] : [];
+      it.cands = PH.match.candidates(it.prep, it.sides, ref, ctx.free, must);
     }
     return PH.match.assign(items, ref, { filled: ctx.filled, holes: ctx.holes });
   }
 
-  // Dasselbe Teil auf zwei Fotos (etwa Übersicht und Nahaufnahme): alle vier
-  // Seitenprofile und die Farben stimmen bei einer der vier Drehungen überein.
-  // Liefert Index des Doppels → Index des behaltenen Teils.
+  // The same piece in two photos (e.g. overview and close-up): all four side
+  // profiles and the colours agree at one of the four rotations. Returns
+  // index of the duplicate → index of the kept piece.
   function findDuplicates(items, ref) {
     const dup = new Map();
     if (new Set(items.map((it) => it.scene)).size < 2) return dup;
     const prep = items.map((it) => PH.match.preparePiece(it.raw, ref.C, ref.G, null));
     const N = PH.piece.PROFILE_N;
-    // Gemessen an Fotos desselben Puzzles in zwei Größen: echte Doppel liegen
-    // bei Form < 0,05 und Farbe < 9, fremde Teile ab etwa 0,04 und 15.
+    // Measured on photos of the same puzzle at two sizes: true duplicates are
+    // at shape < 0.05 and colour < 9, other pieces from about 0.04 and 15.
     const score = (i, j, k) => {
       let shape = 0;
       let mismatch = 0;
@@ -225,7 +361,7 @@
     return dup;
   }
 
-  // scenes: Ergebnisse von analyzeScene. Liefert Vorschläge je Teil.
+  // scenes: results of analyzeScene. Returns suggestions per piece.
   function solve(ref, scenes, opts = {}) {
     const progress = opts.progress ?? (() => {});
     const N = ref.cols * ref.rows;
@@ -240,10 +376,17 @@
       }
       holes = s.board.holes;
     }
+    // Places of joined groups are taken for loose pieces.
+    for (const s of scenes)
+      for (const g of s.groups ?? [])
+        for (const c of g.cells) {
+          free[c] = 0;
+          filled.add(c);
+        }
     const items = [];
     scenes.forEach((s, si) => {
       s.pieces.forEach((p, pi) => {
-        items.push({ scene: si, index: pi, raw: p.raw, sides: p.shape.sides, shape: p.shape });
+        items.push({ scene: si, index: pi, raw: p.raw, sides: p.shape.sides, shape: p.shape, feat: p.feat });
       });
     });
     const dup = findDuplicates(items, ref);
@@ -282,8 +425,8 @@
     });
   }
 
-  // Platz, Drehung (Grad im Uhrzeigersinn, so wie das Teil im Foto liegt) und
-  // Zielpunkt im Foto, falls dort das Puzzle zu sehen ist.
+  // Place, rotation (degrees clockwise, as the piece lies in the photo) and
+  // target point in the photo if the puzzle is visible there.
   function describe(cand, it, scene, ref) {
     const { cols, C } = ref;
     const row = Math.floor(cand.cell / cols);
@@ -291,11 +434,10 @@
     let psi = 0;
     let target = null;
     if (scene.board) {
-      const H = scene.board.H;
       const cx = (col + 0.5) * C;
       const cy = (row + 0.5) * C;
-      target = PH.geom.applyH(H, cx, cy);
-      const t2 = PH.geom.applyH(H, cx + C, cy);
+      target = PH.board.toScene(scene.board, cx, cy);
+      const t2 = PH.board.toScene(scene.board, cx + C, cy);
       psi = (Math.atan2(t2[1] - target[1], t2[0] - target[0]) * 180) / Math.PI;
     }
     const turn = PH.geom.wrapDeg(-it.shape.angle + cand.rot * 90 + psi);

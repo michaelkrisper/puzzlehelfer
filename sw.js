@@ -1,6 +1,6 @@
-// Alles vorab zwischenspeichern; die App braucht danach kein Netz mehr.
-// Bei jeder Änderung an einer der Dateien VERSION hochzählen.
-const VERSION = 'v2';
+// Precache everything; after that the app needs no network.
+// Bump VERSION whenever any of these files changes.
+const VERSION = 'v3';
 const FILES = [
   './',
   'index.html',
@@ -13,6 +13,7 @@ const FILES = [
   'core/reference.js',
   'core/match.js',
   'core/board.js',
+  'core/feature.js',
   'core/pipeline.js',
   'vendor/opencv.js',
   'manifest.webmanifest',

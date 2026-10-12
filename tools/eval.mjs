@@ -1,4 +1,4 @@
-// Misst die Erkennung an einer Szene aus tools/synth.py.
+// Measures recognition on one scene from tools/synth.py.
 // node tools/eval.mjs DIR [--max 2000] [--clean] [--json]
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -13,12 +13,12 @@ export async function loadCore() {
   const cv = require(join(root, 'vendor/opencv.js'));
   if (!cv.Mat) await new Promise((r) => (cv.onRuntimeInitialized = r));
   delete cv.then;
-  for (const f of ['geom', 'piece', 'segment', 'reference', 'match', 'board', 'pipeline'])
+  for (const f of ['geom', 'piece', 'segment', 'reference', 'match', 'board', 'feature', 'pipeline'])
     require(join(root, `core/${f}.js`));
   return { cv, PH: globalThis.PH };
 }
 
-// Bild über PIL als RGBA laden, größte Seite höchstens max Pixel.
+// Load an image as RGBA via PIL, longest side at most max pixels.
 export function loadImage(path, max = 0) {
   const py = `
 import sys
@@ -36,8 +36,8 @@ sys.stdout.buffer.write(im.width.to_bytes(4, 'little') + im.height.to_bytes(4, '
   return { width, height, data: new Uint8ClampedArray(buf.buffer, buf.byteOffset + 8, width * height * 4) };
 }
 
-// Schachtelfoto in schlecht: klein, unscharf, Farbstich, Spiegelung, starke
-// JPEG-Kompression. So sehen aufgedruckte Deckelbilder abfotografiert aus.
+// A bad box photo: small, blurry, colour cast, glare, heavy JPEG compression.
+// That is what a photographed lid picture looks like.
 export function loadBadReference(path) {
   const py = `
 import io, os, sys

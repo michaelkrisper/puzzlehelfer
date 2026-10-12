@@ -1,5 +1,5 @@
-// Oberfläche: Vorlage aufnehmen und zuschneiden, Teilefotos hinzufügen,
-// Vorschläge mit Pfeilen und Drehung einzeichnen.
+// UI: capture and crop the reference, add pieces photos,
+// draw suggestions with arrows and rotation.
 const { gridFor, applyH } = PH.geom;
 const REF_MAX = 2400;
 const SCENE_MAX = 4000;
@@ -39,7 +39,7 @@ function call(type, payload = {}) {
   });
 }
 
-// ---------- Speicher (IndexedDB) ----------
+// ---------- Storage (IndexedDB) ----------
 const db = new Promise((resolve, reject) => {
   const r = indexedDB.open('puzzlehelfer', 1);
   r.onupgradeneeded = () => r.result.createObjectStore('kv');
@@ -65,7 +65,7 @@ async function load(key) {
   });
 }
 
-// ---------- Bilder ----------
+// ---------- Images ----------
 async function decode(blob, max) {
   const bmp = await createImageBitmap(blob);
   const f = Math.min(1, max / Math.max(bmp.width, bmp.height));
@@ -90,7 +90,7 @@ function sizeCanvas(cv, cssW, cssH) {
   return g;
 }
 
-// ---------- Zustand ----------
+// ---------- State ----------
 const state = {
   refBlob: null,
   refImg: null, // {canvas, image}
@@ -110,7 +110,7 @@ function show(id, on) {
   $(id).hidden = !on;
 }
 
-// ---------- Schritt 1: Vorlage ----------
+// ---------- Step 1: reference ----------
 for (const input of document.querySelectorAll('input[data-ref]')) {
   input.addEventListener('change', async () => {
     const file = input.files[0];
@@ -262,7 +262,7 @@ async function applyReference() {
   state.refView = { canvas: c, W: r.W, H: r.H, C: r.C };
   drawRefPreview();
   setStatus('');
-  // Neues Raster: vorhandene Fotos neu auswerten.
+  // New grid: re-analyse existing photos.
   for (const s of state.scenes) s.busy = true;
   renderThumbs();
   for (const s of state.scenes) await analyze(s, false);
@@ -337,7 +337,7 @@ $('ref-recrop').addEventListener('click', () => {
   crop.draw();
 });
 
-// ---------- Schritt 2: Teilefotos ----------
+// ---------- Step 2: pieces photos ----------
 let sceneSeq = 1;
 for (const input of document.querySelectorAll('input[data-scene]')) {
   input.addEventListener('change', async () => {
@@ -447,8 +447,8 @@ function setStatus(t) {
 async function solve() {
   setStatus('Plätze werden gesucht …');
   const r = await call('solve');
-  // Reihenfolge: sichere Teile in der Reihenfolge, in der sie sich ergeben,
-  // dann die übrigen nach Sicherheit.
+  // Order: sure pieces in the order they are resolved,
+  // then the rest by confidence.
   const order = r.suggestions
     .filter((s) => s.cell !== null && !s.sameAs)
     .sort((a, b) => (a.step ?? 1e9) - (b.step ?? 1e9) || b.conf - a.conf);
@@ -456,7 +456,7 @@ async function solve() {
     s.label = i + 1;
     s.level = s.step && s.conf >= 0.6 ? 'ok' : s.conf >= 0.2 ? 'maybe' : 'bad';
   });
-  // Dasselbe Teil auf einem zweiten Foto trägt dieselbe Nummer.
+  // The same piece on a second photo gets the same number.
   const sceneIds = r.scenes.map((x) => x.id);
   for (const s of r.suggestions) {
     if (!s.sameAs || s.cell === null) continue;
@@ -466,12 +466,31 @@ async function solve() {
     s.label = twin?.label;
     s.level = twin?.level ?? 'bad';
   }
+  // Joined groups: letters instead of numbers.
+  for (const sc of r.scenes) {
+    (sc.groups ?? []).forEach((g, i) => {
+      g.label = String.fromCharCode(65 + i);
+      g.level = 'ok';
+      let x = 0;
+      let y = 0;
+      for (const [px, py] of g.outline) {
+        x += px;
+        y += py;
+      }
+      g.center = [x / g.outline.length, y / g.outline.length];
+      // badge() sizes label and arc by one piece side.
+      const side = Math.sqrt(polyArea(g.outline) / g.cells.length);
+      g.corners = [g.center, [g.center[0] + side, g.center[1]]];
+    });
+  }
   state.result = r;
   const sure = order.filter((s) => s.level === 'ok').length;
   const maybe = order.filter((s) => s.level === 'maybe').length;
   const unclear = r.scenes.reduce((a, s) => a + s.unclear.length, 0);
   const total = r.suggestions.filter((s) => !s.sameAs).length;
   let msg = `${total} Teile erkannt: ${sure} sicher, ${maybe} vermutlich zugeordnet.`;
+  const groups = r.scenes.reduce((a, s) => a + (s.groups?.length ?? 0), 0);
+  if (groups) msg += ` ${groups} zusammengesteckte ${groups === 1 ? 'Gruppe' : 'Gruppen'} zugeordnet.`;
   if (unclear) msg += ` ${unclear} Flecken unklar (berühren sich Teile?).`;
   if (r.scenes.some((s) => s.board)) msg += ' Puzzle im Foto gefunden – Pfeile zeigen auf den Platz.';
   setStatus(msg);
@@ -479,7 +498,7 @@ async function solve() {
   renderResult();
 }
 
-// ---------- Ergebnis zeichnen ----------
+// ---------- Draw result ----------
 const COLORS = { ok: '#3ddc84', maybe: '#ffc94d', bad: '#ff6b6b' };
 
 const view = {
@@ -503,7 +522,7 @@ function renderResult() {
   const cur = currentScene();
   if (!cur) return;
   const cv = $('viewer');
-  // Koordinaten der Erkennung beziehen sich auf das ggf. verkleinerte Arbeitsbild.
+  // Recognition coordinates refer to the possibly downscaled working image.
   const { width: w, height: h } = cur.info;
   view.cssW = cv.parentElement.clientWidth;
   view.cssH = Math.min(window.innerHeight * 0.7, (view.cssW * h) / w);
@@ -529,7 +548,7 @@ function drawViewer() {
   g.translate(view.tx, view.ty);
   g.scale(view.s, view.s);
   g.drawImage(cur.s.canvas, 0, 0, cur.info.width, cur.info.height);
-  const px = 1 / view.s; // eine Bildschirmeinheit in Bildpixeln
+  const px = 1 / view.s; // one screen unit in image pixels
   const sugg = state.result.suggestions.filter((x) => x.sceneId === cur.s.id);
 
   for (const u of cur.info.unclear) {
@@ -541,6 +560,14 @@ function drawViewer() {
     g.setLineDash([]);
   }
   if (cur.info.board) drawFilled(g, cur.info.board, px);
+  for (const gr of cur.info.groups ?? []) {
+    poly(g, gr.outline);
+    g.strokeStyle = `${COLORS.ok}cc`;
+    g.lineWidth = 2 * px;
+    g.stroke();
+    if (gr.target) arrow(g, gr.center, gr.target, COLORS.ok, px);
+    badge(g, gr.center, gr, px);
+  }
   for (const x of sugg) {
     const p = cur.info.pieces[x.index];
     const col = x.cell === null ? COLORS.bad : COLORS[x.level];
@@ -551,7 +578,7 @@ function drawViewer() {
   }
   for (const x of sugg) {
     if (x.cell === null || x.level === 'bad' || !x.target) continue;
-    // Viele Pfeile kreuzen sich: standardmäßig nur die nächsten Schritte.
+    // Many arrows cross: by default only the next steps.
     if (!state.allArrows && x.label > ARROWS && x !== state.selected) continue;
     arrow(g, x.center, x.target, COLORS[x.level], px);
     targetMarker(g, x, cur.info.board, px);
@@ -563,6 +590,16 @@ function drawViewer() {
   g.restore();
 }
 
+function polyArea(pts) {
+  let a = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [x0, y0] = pts[i];
+    const [x1, y1] = pts[(i + 1) % pts.length];
+    a += x0 * y1 - x1 * y0;
+  }
+  return Math.abs(a) / 2;
+}
+
 function poly(g, pts) {
   g.beginPath();
   g.moveTo(pts[0][0], pts[0][1]);
@@ -571,7 +608,7 @@ function poly(g, pts) {
 }
 
 function drawFilled(g, board, px) {
-  // Rahmen um das erkannte Puzzle.
+  // Frame around the detected puzzle.
   const { W, H } = state.refView;
   const pts = [
     [0, 0],
@@ -629,10 +666,10 @@ function targetMarker(g, x, board, px) {
   g.stroke();
 }
 
-// Nummer mit Drehpfeil: Bogen in Drehrichtung, Gradzahl daneben.
+// Number with rotation arrow: arc in the turn direction, degrees beside it.
 function badge(g, c, x, px0) {
-  // In der Übersicht sind Teile oft nur wenige Millimeter groß: Beschriftung
-  // mitschrumpfen lassen, Gradzahlen erst beim Hineinzoomen zeigen.
+  // In the overview pieces are often only a few millimetres: shrink the label
+  // along, show degrees only when zoomed in.
   const side = Math.hypot(x.corners[1][0] - x.corners[0][0], x.corners[1][1] - x.corners[0][1]);
   const sideScreen = side / px0;
   const px = px0 * Math.max(0.5, Math.min(1, sideScreen / 70));
@@ -640,8 +677,8 @@ function badge(g, c, x, px0) {
   const color = COLORS[x.level];
   const turn = Math.round(x.turn / 5) * 5;
   if (Math.abs(turn) >= 10 && x.level !== 'bad') {
-    // Bogen um das Teil herum, so groß wie das Teil selbst: zeigt Richtung
-    // und ungefähren Winkel auf einen Blick.
+    // Arc around the piece, as large as the piece itself: shows direction
+    // and rough angle at a glance.
     const R = Math.max(r + 8 * px, side * 0.42);
     const a0 = -Math.PI / 2;
     const a1 = a0 + (turn * Math.PI) / 180;
@@ -655,7 +692,7 @@ function badge(g, c, x, px0) {
       g.arc(c[0], c[1], R, Math.min(a0, a1), Math.max(a0, a1));
       g.stroke();
     }
-    // Pfeilspitze tangential am Ende des Bogens
+    // Arrowhead tangent at the end of the arc
     const ex = c[0] + Math.cos(a1) * R;
     const ey = c[1] + Math.sin(a1) * R;
     const dir = a1 + (turn > 0 ? Math.PI / 2 : -Math.PI / 2);
@@ -723,6 +760,26 @@ function drawMap() {
     (x) => x.sceneId === state.current && x.cell !== null && x.level !== 'bad',
   );
   const fs = Math.max(9, Math.min(14, C * k * 0.55));
+  const info = state.result.scenes.find((s) => s.id === state.current);
+  for (const gr of info?.groups ?? []) {
+    g.fillStyle = `${COLORS.ok}55`;
+    for (const cell of gr.cells) {
+      const r = Math.floor(cell / state.cols);
+      const c = cell % state.cols;
+      g.fillRect(c * C * k, r * C * k, C * k, C * k);
+    }
+    const cx = (gr.col + 0.5) * C * k;
+    const cy = (gr.row + 0.5) * C * k;
+    g.beginPath();
+    g.arc(cx, cy, fs * 0.75, 0, Math.PI * 2);
+    g.fillStyle = COLORS.ok;
+    g.fill();
+    g.fillStyle = '#000';
+    g.font = `bold ${fs}px system-ui, sans-serif`;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText(gr.label, cx, cy + 0.5);
+  }
   for (const x of sugg) {
     const cx = (x.col + 0.5) * C * k;
     const cy = (x.row + 0.5) * C * k;
@@ -741,7 +798,7 @@ function drawMap() {
   }
 }
 
-// ---------- Zoomen, Verschieben, Antippen ----------
+// ---------- Zoom, pan, tap ----------
 const vc = $('viewer');
 let gesture = null;
 let lastTap = 0;

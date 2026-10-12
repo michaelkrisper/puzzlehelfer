@@ -1,11 +1,11 @@
-// Teile vom Tisch trennen. Der Tisch füllt den Bildrand, daraus entsteht ein
-// Farbmodell (bis zu vier Farbcluster, etwa Holzmaserung); alles, was davon
-// deutlich abweicht, ist Puzzle.
+// Separate pieces from the table. The table fills the image border; it gives a
+// colour model (several colour clusters, e.g. wood grain); everything that
+// differs clearly is puzzle.
 (() => {
   globalThis.PH ??= {};
   const PH = globalThis.PH;
 
-  // sRGB → CIELab (L 0…100, a/b ca. -100…100), D65.
+  // sRGB → CIELab (L 0…100, a/b about -100…100), D65.
   const LIN = new Float32Array(256);
   for (let i = 0; i < 256; i++) {
     const c = i / 255;
@@ -98,8 +98,9 @@
     return ((best + 1) / bins) * maxV;
   }
 
-  // Abstand jedes Pixels zum Tischmodell, in Streuungen gemessen. Helligkeit
-  // zählt halb, damit Schlagschatten der Teile nicht als Teil gelten.
+  // Distance of every pixel to the table model, in standard deviations.
+  // Lightness counts half so that cast shadows of pieces do not count as
+  // pieces.
   function backgroundDistance(lab, w, h) {
     const band = Math.max(4, Math.round(Math.min(w, h) * 0.04));
     const s = [];
@@ -110,16 +111,21 @@
         s.push(lab[i], lab[i + 1], lab[i + 2]);
       }
     }
-    // Der häufigste Randton ist der Tisch; weitere Töne nur, wenn sie ihm
-    // ähneln (Maserung). Teile am Bildrand dürfen nicht zum Tisch werden.
+    // The most frequent border colour is the table; further colours only with
+    // the same hue (grain, light falloff across the image: any brighter).
+    // Clearly darker colours only if they make up a large part of the border
+    // (darker planks); rare dark colours are rather brown pieces at the image
+    // border.
     const all = kmeans(Float32Array.from(s), 6, 10).sort((a, b) => b.weight - a.weight);
-    const near = (c) =>
-      Math.hypot(c.mean[0] - all[0].mean[0], c.mean[1] - all[0].mean[1], c.mean[2] - all[0].mean[2]);
-    const clusters = all.filter((c, i) => i === 0 || (c.weight > 0.05 && near(c) < 20));
+    const sameHue = (c) => Math.hypot(c.mean[1] - all[0].mean[1], c.mean[2] - all[0].mean[2]) < 6;
+    const clusters = all.filter(
+      (c, i) =>
+        i === 0 || (c.weight > 0.05 && sameHue(c) && (c.mean[0] - all[0].mean[0] > -12 || c.weight >= 0.15)),
+    );
     const model = clusters.map((c) => ({
       mean: c.mean,
-      // Streuung nach unten und oben begrenzt: Ein zu breiter Cluster würde
-      // sonst auch Teile als Tisch durchwinken.
+      // Spread limited both ways: a too wide cluster would otherwise let
+      // pieces pass as table.
       inv: [
         1 / (2 * Math.min(8, Math.max(3, c.std[0]))),
         1 / Math.min(6, Math.max(2.5, c.std[1])),
@@ -142,13 +148,50 @@
     return { dist, model };
   }
 
-  // Typische Teilfläche: Größe, die zahlreich vorkommt und zusammen viel
-  // Fläche ausmacht (Fläche × Anzahl ähnlich großer Flecken).
-  // Viele Krümel (Maserung) sind klein, ein fertiger Puzzlebereich ist
-  // einzeln; die losen Teile sind zahlreich und gleich groß.
+  // Local spread of lightness (7×7): cardboard edges, fur and lettering have a
+  // lot of it, wood and soft shadows little.
+  function localStd(cv, img) {
+    const rgba = cv.matFromImageData(img);
+    const g = new cv.Mat();
+    cv.cvtColor(rgba, g, cv.COLOR_RGBA2GRAY);
+    rgba.delete();
+    g.convertTo(g, cv.CV_32F);
+    cv.GaussianBlur(g, g, new cv.Size(3, 3), 0.8);
+    const g2 = new cv.Mat();
+    cv.multiply(g, g, g2);
+    const ksz = new cv.Size(7, 7);
+    cv.boxFilter(g, g, -1, ksz);
+    cv.boxFilter(g2, g2, -1, ksz);
+    const mean = Float32Array.from(g.data32F);
+    const sq = Float32Array.from(g2.data32F);
+    g.delete();
+    g2.delete();
+    const sd = new Float32Array(mean.length);
+    for (let i = 0; i < sd.length; i++) sd[i] = Math.sqrt(Math.max(0, sq[i] - mean[i] * mean[i]));
+    return sd;
+  }
+
+  // Value at the table border (quantile q), e.g. for noise and grain.
+  function borderQuantile(arr, w, h, q) {
+    const band = [];
+    const bw = Math.max(4, Math.round(Math.min(w, h) * 0.04));
+    for (let y = 0; y < h; y += 2)
+      for (let x = 0; x < w; x += 2)
+        if (x < bw || x >= w - bw || y < bw || y >= h - bw) band.push(arr[y * w + x]);
+    band.sort((a, b) => a - b);
+    return band[Math.floor(band.length * q)] ?? 0;
+  }
+
+  // Typical piece area: a size that occurs often and adds up to a lot of area
+  // (area × number of similar-sized blobs). Crumbs (grain) are small, a
+  // finished puzzle area is single; the loose pieces are many and alike.
   function typicalArea(areas) {
     let best = 0;
     let bestScore = 0;
+    const count = (a) => areas.filter((b) => b > a / 1.5 && b < a * 1.5).length;
+    // A single large blob (finished border including its inner area) is never
+    // the typical size as long as there are several of equal size.
+    const minN = areas.some((a) => count(a) >= 3) ? 3 : 1;
     for (const a of areas) {
       let sc = 0;
       let n = 0;
@@ -158,6 +201,7 @@
           n++;
         }
       }
+      if (n < minN) continue;
       sc *= n;
       if (sc > bestScore) {
         bestScore = sc;
@@ -174,9 +218,10 @@
     return pts;
   }
 
-  // Umriss eines Teils mit GrabCut nachschärfen: Farbmodelle aus dem Teil
-  // selbst und seiner nächsten Umgebung statt aus dem ganzen Tisch. Schließt
-  // tischfarbene Stellen im Motiv, die sonst als Kerben im Umriss landen.
+  // Sharpen a piece outline with GrabCut: colour models from the piece itself
+  // and its immediate surroundings instead of the whole table. Closes
+  // table-coloured spots in the motif that would otherwise end up as notches
+  // in the outline.
   function refinePiece(cv, rgb, contour, bbox, side) {
     const W = rgb.cols;
     const H = rgb.rows;
@@ -246,8 +291,140 @@
     return out;
   }
 
-  // Ergebnis: Teile (Kontur, Fläche), große Flächen (fertige Puzzlebereiche
-  // oder aneinanderliegende Teile) und die Vordergrundmaske.
+  // Brown pieces on wood: colour alone hardly separates fur from grain, but the
+  // cardboard edge draws a closed outline with a lot of structure, wood and
+  // soft shadows have little. Strong structure near pieces already found
+  // counts as well (also weak ones without a clear core: weak), a piece is
+  // filled within its outline, thin edge remnants vanish when opening.
+  function addOutlines(cv, img, raw, weak, sd) {
+    const { width: w, height: h } = img;
+    const n = w * h;
+    // Threshold from the table border: grain and noise stay below it.
+    const T = Math.max(18, 2 * (borderQuantile(sd, w, h, 0.9) || 9));
+
+    // Blob by blob, so that plank joints and grain between two pieces do not
+    // build a bridge: edge pixels only count if they are closer to this blob
+    // than to any other. Large blobs (finished part) stay as they are.
+    const components = (m) => {
+      const labels = new cv.Mat();
+      const stats = new cv.Mat();
+      const cents = new cv.Mat();
+      const nl = cv.connectedComponentsWithStats(m, labels, stats, cents, 8, cv.CV_32S);
+      const r = { nl, st: Int32Array.from(stats.data32S), lab: Int32Array.from(labels.data32S) };
+      labels.delete();
+      stats.delete();
+      cents.delete();
+      return r;
+    };
+    const base = components(weak);
+    const areas = [];
+    for (let k = 1; k < base.nl; k++) if (base.st[k * 5 + 4] > n * 0.00004) areas.push(base.st[k * 5 + 4]);
+    const pieceArea = typicalArea(areas);
+    if (!pieceArea) return;
+    // Fragments (clearly smaller than a piece, e.g. a fur piece that fell
+    // apart) form a group with neighbours a few pixels away. Whole pieces stay
+    // separate even when they lie close together.
+    const grouped = cv.Mat.zeros(h, w, cv.CV_8UC1);
+    const gd = grouped.data;
+    for (let i = 0; i < n; i++) {
+      const l = base.lab[i];
+      if (l && base.st[l * 5 + 4] < pieceArea * 0.6) gd[i] = 255;
+    }
+    const kg = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(7, 7));
+    cv.dilate(grouped, grouped, kg);
+    kg.delete();
+    cv.bitwise_or(grouped, weak, grouped);
+    const grp = components(grouped);
+    grouped.delete();
+    const st = grp.st;
+    const lab = grp.lab;
+    const nl = grp.nl;
+    // Use memory views only fresh (see segmentScene): from here on work with
+    // JS copies and write raw back at the end.
+    const wd = Uint8Array.from(weak.data);
+    // How many blobs per group: only join fragments there.
+    const groupOf = new Int32Array(base.nl).fill(-1);
+    const parts = new Int32Array(nl);
+    for (let i = 0; i < n; i++) {
+      const l = base.lab[i];
+      if (l && groupOf[l] < 0) {
+        groupOf[l] = lab[i];
+        parts[lab[i]]++;
+      }
+    }
+    const R = Math.max(4, Math.round(Math.sqrt(pieceArea) * 0.15));
+    const rd = Uint8Array.from(raw.data);
+    for (let k = 1; k < nl; k++) {
+      const area = st[k * 5 + 4];
+      if (area < pieceArea * 0.1 || area > pieceArea * 2.4) continue;
+      const x0 = Math.max(0, st[k * 5] - R);
+      const y0 = Math.max(0, st[k * 5 + 1] - R);
+      const x1 = Math.min(w, st[k * 5] + st[k * 5 + 2] + R);
+      const y1 = Math.min(h, st[k * 5 + 1] + st[k * 5 + 3] + R);
+      const rw = x1 - x0;
+      const rh = y1 - y0;
+      const od = new Uint8Array(rw * rh);
+      const ot = new Uint8Array(rw * rh);
+      for (let y = 0; y < rh; y++) {
+        for (let x = 0; x < rw; x++) {
+          const j = (y + y0) * w + x + x0;
+          if (!wd[j]) continue;
+          if (lab[j] === k) od[y * rw + x] = 255;
+          else if (lab[j]) ot[y * rw + x] = 255;
+        }
+      }
+      const own = cv.matFromArray(rh, rw, cv.CV_8UC1, od);
+      const other = cv.matFromArray(rh, rw, cv.CV_8UC1, ot);
+      const kn = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(2 * R + 1, 2 * R + 1));
+      const near = new cv.Mat();
+      cv.dilate(own, near, kn);
+      const kh = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(R + 1, R + 1));
+      cv.dilate(other, other, kh);
+      const nd = Uint8Array.from(near.data);
+      const oh = Uint8Array.from(other.data);
+      for (let y = 0; y < rh; y++) {
+        for (let x = 0; x < rw; x++) {
+          const i = y * rw + x;
+          if (nd[i] && !oh[i] && sd[(y + y0) * w + x + x0] > T) od[i] = 255;
+        }
+      }
+      own.data.set(od);
+      // Fill the blob within its outline: close fragments, largest outer
+      // outline. No closing for a single blob, that would seal narrow hole
+      // necks.
+      if (parts[k] > 1) {
+        const kc = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(7, 7));
+        cv.morphologyEx(own, own, cv.MORPH_CLOSE, kc);
+        kc.delete();
+      }
+      const cs = new cv.MatVector();
+      const hh = new cv.Mat();
+      cv.findContours(own, cs, hh, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+      let best = -1;
+      let bestA = 0;
+      for (let i = 0; i < cs.size(); i++) {
+        const c = cs.get(i);
+        const a = cv.contourArea(c);
+        if (a > bestA) {
+          bestA = a;
+          best = i;
+        }
+        c.delete();
+      }
+      const fill = cv.Mat.zeros(rh, rw, cv.CV_8UC1);
+      if (best >= 0 && bestA < pieceArea * 2.4) cv.drawContours(fill, cs, best, new cv.Scalar(255), -1);
+      const ko = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5, 5));
+      cv.morphologyEx(fill, fill, cv.MORPH_OPEN, ko);
+      const fd = Uint8Array.from(fill.data);
+      for (let y = 0; y < rh; y++)
+        for (let x = 0; x < rw; x++) if (fd[y * rw + x]) rd[(y + y0) * w + x + x0] = 255;
+      for (const m of [own, other, kn, near, kh, cs, hh, fill, ko]) m.delete();
+    }
+    raw.data.set(rd);
+  }
+
+  // Result: pieces (contour, area), large areas (finished puzzle areas or
+  // pieces lying against each other) and the foreground mask.
   function drawPoly(cv, mat, contour) {
     const poly = cv.matFromArray(contour.length, 1, cv.CV_32SC2, contour.flat());
     const pv = new cv.MatVector();
@@ -260,10 +437,11 @@
   function segmentScene(cv, img, lab, opts = {}) {
     const { width: w, height: h } = img;
     const { dist } = backgroundDistance(lab, w, h);
+    const sd = localStd(cv, img);
     const sample = [];
     for (let i = 0; i < dist.length; i += 7) sample.push(Math.min(dist[i], 30));
-    // Streuung des Tischs selbst am Bildrand: Maserung und Rauschen dürfen
-    // nicht über der Schwelle liegen, egal was Otsu meint.
+    // Spread of the table itself at the image border: grain and noise must not
+    // exceed the threshold, whatever Otsu says.
     const band = [];
     const bw = Math.max(4, Math.round(Math.min(w, h) * 0.04));
     for (let y = 0; y < h; y += 2) {
@@ -273,22 +451,22 @@
       }
     }
     band.sort((a, b) => a - b);
-    // Median statt höherer Quantile: Bei dicht gelegten Teilen liegen auch
-    // Teile im Randstreifen.
+    // Median instead of higher quantiles: with densely laid pieces there are
+    // pieces in the border band too.
     const p50 = band[Math.floor(band.length * 0.5)] ?? 1;
-    // Hysterese: Teile müssen irgendwo deutlich vom Tisch abweichen (hoch),
-    // ihr Umriss reicht aber bis zur niedrigen Schwelle. Tischrauschen ohne
-    // deutlichen Kern fällt weg, Teilränder franzen nicht aus.
+    // Hysteresis: pieces must differ clearly from the table somewhere (high),
+    // but their outline extends to the low threshold. Table noise without a
+    // clear core is dropped, piece edges do not fray.
     const tLow = Math.max(3, 2 * p50);
     const thr = Math.max(tLow * 1.6, 5, Math.min(12, otsu(sample, 30, 120)));
 
-    // Leicht geglättet statt morphologisch geschlossen: Ein großes Schließen
-    // würde bei kleinen Teilen die schmalen Hälse der Löcher zukleben.
+    // Lightly smoothed instead of morphologically closed: a big closing would
+    // seal the narrow necks of holes on small pieces.
     const dm = cv.matFromArray(h, w, cv.CV_32FC1, dist);
     cv.GaussianBlur(dm, dm, new cv.Size(5, 5), 1.2);
     const raw = new cv.Mat(h, w, cv.CV_8UC1);
-    // Speicheransichten erst nach allen Allokationen holen: wächst der
-    // WASM-Speicher, zeigen ältere Ansichten ins Leere.
+    // Fetch memory views only after all allocations: if WASM memory grows,
+    // older views point to nothing.
     const ds = Float32Array.from(dm.data32F);
     dm.delete();
     const md = raw.data;
@@ -297,6 +475,8 @@
     const k7 = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
     cv.morphologyEx(raw, raw, cv.MORPH_OPEN, k3);
     cv.morphologyEx(raw, raw, cv.MORPH_CLOSE, k7);
+    // Clone before fetching the views: allocations move memory.
+    const weak = opts.outlines !== false ? raw.clone() : null;
     const labels = new cv.Mat();
     const nl = cv.connectedComponents(raw, labels, 8, cv.CV_32S);
     const strong = new Uint8Array(nl);
@@ -305,6 +485,10 @@
     const rd = raw.data;
     for (let i = 0; i < ds.length; i++) if (!strong[ld[i]]) rd[i] = 0;
     labels.delete();
+    if (weak) {
+      addOutlines(cv, img, raw, weak, sd);
+      weak.delete();
+    }
 
     const minArea = w * h * 0.00004;
     const rgba = cv.matFromImageData(img);
@@ -348,9 +532,8 @@
       cv.drawContours(mask, contours, o.i, new cv.Scalar(255), -1);
       if (isBig) cv.drawContours(bigMask, contours, o.i, new cv.Scalar(255), -1);
       const contour = contourPoints(c);
-      // Zweiter Umriss per GrabCut, nur wenn der erste keine saubere Form
-      // ergibt (GrabCut kostet die meiste Rechenzeit); welcher besser ist,
-      // entscheidet die Form.
+      // Second outline by GrabCut, only if the first gives no clean shape
+      // (GrabCut costs most of the time); the shape decides which is better.
       let alt = null;
       const firstQ = isBig || touches ? 1 : (PH.piece.analyzeContour(contour)?.quality ?? 0);
       if (!isBig && opts.refine !== false && firstQ < 0.5) {
@@ -368,8 +551,8 @@
       (isBig ? big : pieces).push(item);
       c.delete();
     }
-    // Löcher in großen Flächen (leere Plätze im fertigen Teil) bleiben frei,
-    // kleine Löcher (Spiegelungen, tischfarbene Stellen im Motiv) nicht.
+    // Holes in large areas (empty places in the finished part) stay free,
+    // small holes (reflections, table-coloured spots in the motif) do not.
     const bigIds = new Set(outer.filter((o) => o.area > pieceArea * 2.4).map((o) => o.i));
     for (const hole of holes) {
       if (bigIds.has(hole.parent) && hole.area > pieceArea * 0.12) {
@@ -377,6 +560,10 @@
         cv.drawContours(bigMask, contours, hole.i, new cv.Scalar(0), -1);
       }
     }
+    // Loose pieces can lie in such a hole, e.g. inside the finished border.
+    for (const o of outer)
+      if (!bigIds.has(o.i) && o.area >= Math.max(minArea, pieceArea * 0.3))
+        cv.drawContours(mask, contours, o.i, new cv.Scalar(255), -1);
     raw.delete();
     rgb.delete();
     k3.delete();

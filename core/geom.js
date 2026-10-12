@@ -1,10 +1,11 @@
-// Geometrie ohne OpenCV: Homographien, Raster, Winkel. Läuft im Worker
-// (importScripts) und in Node (require) gleichermaßen.
+// Geometry without OpenCV: homographies, grid, angles. Runs in the worker
+// (importScripts) and in Node (require) alike.
 (() => {
   globalThis.PH ??= {};
   const PH = globalThis.PH;
 
-  // Löst A·x = b per Gauß mit Spaltenpivot, A als Array von Zeilen.
+  // Solves A·x = b by Gaussian elimination with column pivoting, A as an
+  // array of rows.
   function solve(A, b) {
     const n = b.length;
     const M = A.map((row, i) => [...row, b[i]]);
@@ -22,7 +23,7 @@
     return M.map((row, i) => row[n] / row[i]);
   }
 
-  // Homographie aus 4 Punktpaaren, Ergebnis zeilenweise als 9 Zahlen.
+  // Homography from 4 point pairs, result row by row as 9 numbers.
   function homography(src, dst) {
     const A = [];
     const b = [];
@@ -63,9 +64,9 @@
     ];
   }
 
-  // Spalten × Reihen für eine Teilezahl: Produkt nahe n, Seitenverhältnis
-  // nahe am Bild. Hersteller weichen leicht ab (1000 = 38×27 bei 70×50 cm),
-  // daher wird das Produkt nur weich bestraft.
+  // Columns × rows for a piece count: product close to n, aspect ratio close
+  // to the picture. Manufacturers deviate slightly (1000 = 38×27 at
+  // 70×50 cm), so the product is only penalised softly.
   function gridFor(n, aspect) {
     let best = null;
     for (let rows = 2; rows <= Math.ceil(Math.sqrt(n * 4)); rows++) {
@@ -80,7 +81,7 @@
     return { cols: best.cols, rows: best.rows };
   }
 
-  // Winkel in Grad auf (-180, 180].
+  // Angle in degrees to (-180, 180].
   function wrapDeg(a) {
     let r = a % 360;
     if (r <= -180) r += 360;

@@ -1,5 +1,5 @@
-// Bilderkennung im Hintergrund, damit das 10-MB-OpenCV die Oberfläche weder
-// beim Laden noch beim Rechnen blockiert. Vorlage und Szenen bleiben hier.
+// Image recognition runs in the background so the 10 MB OpenCV blocks the UI
+// neither while loading nor while computing. Reference and scenes live here.
 importScripts(
   'vendor/opencv.js',
   'core/geom.js',
@@ -8,6 +8,7 @@ importScripts(
   'core/reference.js',
   'core/match.js',
   'core/board.js',
+  'core/feature.js',
   'core/pipeline.js',
 );
 
@@ -15,13 +16,13 @@ const ready = new Promise((resolve) => {
   if (self.cv.Mat) resolve();
   else self.cv.onRuntimeInitialized = resolve;
 }).then(() => {
-  // Das Emscripten-Modul ist "thenable" und würde jedes await blockieren.
+  // The Emscripten module is "thenable" and would block every await.
   delete self.cv.then;
   postMessage({ type: 'ready' });
 });
 
 let ref = null;
-const scenes = new Map(); // id → Ergebnis von analyzeScene
+const scenes = new Map(); // id → result of analyzeScene
 
 const progressFor = (id) => (text) => postMessage({ type: 'progress', id, text });
 
@@ -31,7 +32,7 @@ const handlers = {
   },
   reference({ image, quad, cols, rows }) {
     ref = PH.reference.buildReference(cv, image, quad, cols, rows);
-    // Plätze hängen am Raster, alte Analysen passen nicht mehr.
+    // Places depend on the grid, so old analyses no longer fit.
     scenes.clear();
     return { rgba: ref.rgba.data, W: ref.W, H: ref.H, C: ref.C };
   },
@@ -63,6 +64,7 @@ const handlers = {
           height: s.height,
           board: s.board ? { H: s.board.H, filled: s.board.filled } : null,
           unclear: s.unclear,
+          groups: s.groups,
           pieces: s.pieces.map((p) => ({ outline: p.outline, rgba: p.raw.rgba, P: p.raw.P })),
         };
       }),

@@ -1,8 +1,9 @@
-// Vorlagenbild: Bildfläche auf dem Karton finden, entzerren, in Raster teilen.
+// Reference picture: find the picture area on the box, rectify it, split it
+// into the grid.
 (() => {
   globalThis.PH ??= {};
   const PH = globalThis.PH;
-  const G = 4; // Blöcke je Zellseite für die Grobsuche
+  const G = 4; // blocks per cell side for the coarse search
 
   function orderQuad(pts) {
     const s = pts.map(([x, y]) => x + y);
@@ -14,7 +15,7 @@
     return [tl, tr, br, bl];
   }
 
-  // Größtes Viereck mit klaren Kanten, sonst das ganze Bild.
+  // Largest quadrilateral with clear edges, otherwise the whole image.
   function findPictureQuad(cv, img) {
     const { width: w, height: h } = img;
     const full = [
@@ -40,7 +41,7 @@
       if (approx.rows !== 4 || area < w * h * 0.2 || area > w * h * 0.98) return;
       const q = [];
       for (let j = 0; j < 4; j++) q.push([approx.data32S[j * 2], approx.data32S[j * 2 + 1]]);
-      // Ecken am Fotorand stammen meist von Tischkanten oder Maserung.
+      // Corners at the photo border usually come from table edges or grain.
       const m = Math.min(w, h) * 0.01;
       const atEdge = q.some(([x, y]) => x < m || y < m || x > w - m || y > h - m);
       cands.push({ q, area, atEdge });
@@ -64,7 +65,8 @@
       hh.delete();
     };
     scan(edges);
-    // Zweiter Weg: alles, was sich farblich vom Tisch abhebt, als Fläche.
+    // Second way: everything that stands out from the table by colour, as an
+    // area.
     const lab = PH.segment.rgbaToLab(img.data, w * h);
     const { dist } = PH.segment.backgroundDistance(lab, w, h);
     const fg = new cv.Mat(h, w, cv.CV_8UC1);
@@ -91,9 +93,9 @@
     return best ? innerPicture(cv, img, orderQuad(best)) : full;
   }
 
-  // Auf einer Schachtel ist das größte Viereck der Karton. Liegt darin ein
-  // gleichmäßiger Rand (Schriftzug erlaubt), beginnt das Bild an der ersten
-  // durchgehenden Kante dahinter.
+  // On a box the largest quadrilateral is the cardboard. If there is a
+  // uniform margin inside it (lettering allowed), the picture starts at the
+  // first continuous edge behind it.
   function innerPicture(cv, img, quad) {
     const d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
     const asp = (d(quad[0], quad[1]) + d(quad[3], quad[2])) / (d(quad[0], quad[3]) + d(quad[1], quad[2]));
@@ -103,11 +105,11 @@
     const g = new Float32Array(W * H);
     for (let i = 0; i < W * H; i++)
       g[i] = 0.3 * r.data[i * 4] + 0.59 * r.data[i * 4 + 1] + 0.11 * r.data[i * 4 + 2];
-    // Anteil starker Kanten je Zeile (waagrechte Kanten) und Spalte.
+    // Share of strong edges per row (horizontal edges) and column.
     const rowF = new Float32Array(H);
     const colF = new Float32Array(W);
-    // Differenz über ±3 px: Abfotografierte Deckelbilder sind oft unscharf,
-    // die Kante verteilt sich dann über mehrere Pixel.
+    // Difference over ±3 px: photographed lid pictures are often blurry, the
+    // edge then spreads over several pixels.
     for (let y = 3; y < H - 3; y++) {
       for (let x = 3; x < W - 3; x++) {
         const i = y * W + x;
@@ -125,7 +127,7 @@
       for (let i = start; i < n * 0.3; i++) {
         const v = Math.max(f[at(i)], f[at(i + 1)] ?? 0);
         if (v > 0.35 && cnt > 3 && quiet / cnt < 0.12) {
-          // Kante liegt am stärksten Punkt der nächsten Zeilen.
+          // The edge is at the strongest point of the next rows.
           let best = i;
           for (let k = i + 1; k <= i + 6; k++) if (f[at(k)] > f[at(best)]) best = k;
           return at(best);
@@ -164,8 +166,8 @@
     return 16;
   }
 
-  // Entzerrt auf cols·C × rows·C Pixel. Große Fotos werden vorher halbiert,
-  // damit das Verkleinern nicht flimmert.
+  // Rectifies to cols·C × rows·C pixels. Large photos are halved first so
+  // that downscaling does not alias.
   function rectify(cv, img, quad, W, H) {
     let src = cv.matFromImageData(img);
     let q = quad;
@@ -192,7 +194,7 @@
     return { data, width: W, height: H };
   }
 
-  // Mittelwerte über Blöcke der Größe b (Lab, 3 Kanäle).
+  // Means over blocks of size b (Lab, 3 channels).
   function blockMeans(lab, w, h, b) {
     const bw = Math.floor(w / b);
     const bh = Math.floor(h / b);
@@ -219,7 +221,20 @@
     const rgba = rectify(cv, img, quad, W, H);
     const lab = PH.segment.rgbaToLab(rgba.data, W * H);
     const blocks = blockMeans(lab, W, H, C / G);
-    return { cols, rows, C, G, W, H, rgba, lab, blocks };
+    // Width : height of a cell in the reference photo.
+    const len = (a, b) => Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const qw = (len(quad[0], quad[1]) + len(quad[3], quad[2])) / 2;
+    const qh = (len(quad[0], quad[3]) + len(quad[1], quad[2])) / 2;
+    const cellAspect = qw / cols / (qh / rows);
+    const hw = Math.round(Math.min(1200, qw));
+    const hh = Math.round((hw * qh) / qw);
+    const hr = rectify(cv, img, quad, hw, hh);
+    const gray = new Uint8Array(hw * hh);
+    for (let i = 0; i < gray.length; i++)
+      gray[i] = Math.round(0.299 * hr.data[i * 4] + 0.587 * hr.data[i * 4 + 1] + 0.114 * hr.data[i * 4 + 2]);
+    const hi = { gray, w: hw, h: hh };
+    const feat = PH.feature ? PH.feature.describeReference(cv, hi) : [];
+    return { cols, rows, C, G, W, H, rgba, lab, blocks, cellAspect, hi, feat };
   }
 
   PH.reference = { findPictureQuad, buildReference, rectify, blockMeans, cellSizeFor, orderQuad, G };

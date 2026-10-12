@@ -1,5 +1,6 @@
-// Teil ↔ Platz: Bildvergleich (grob über Blockmittel, fein pixelweise) und
-// Formpassung (Rand, Nase/Loch der Nachbarn), dann schrittweise Zuordnung.
+// Piece ↔ place: image comparison (coarse over block means, fine pixel by
+// pixel) and shape fit (border, knob/hole of the neighbours), then stepwise
+// assignment.
 (() => {
   globalThis.PH ??= {};
   const PH = globalThis.PH;
@@ -8,10 +9,11 @@
     [1, 0],
     [0, 1],
     [-1, 0],
-  ]; // oben, rechts, unten, links
+  ]; // top, right, bottom, left
 
-  // Entzerrter Ausschnitt eines Teils: Kernquadrat plus ein Block Rand rundum
-  // (für die Nasen), in Zellgröße der Vorlage. Ecke 0 landet links oben.
+  // Rectified patch of a piece: core square plus one block of margin all
+  // round (for the knobs), at the cell size of the reference. Corner 0 ends up
+  // top left.
   function extractPatch(cv, srcMat, maskMat, corners, C, G) {
     const e = 1 / G;
     const P = C + 2 * (C / G);
@@ -24,7 +26,7 @@
       ],
       corners,
     );
-    // Patchpixel → Einheitsquadrat → Foto.
+    // Patch pixel → unit square → photo.
     const S = [1 / C, 0, -e, 0, 1 / C, -e, 0, 0, 1];
     const M = mul3(H, S);
     const m = cv.matFromArray(3, 3, cv.CV_64F, M);
@@ -48,7 +50,7 @@
     return R;
   }
 
-  // Um k·90° im Uhrzeigersinn drehen (quadratisch, ch Kanäle).
+  // Rotate by k·90° clockwise (square, ch channels).
   function rotate(arr, P, ch, k) {
     if (k === 0) return arr;
     const out = new arr.constructor(arr.length);
@@ -72,7 +74,7 @@
     return out;
   }
 
-  // Blockmittel mit Abdeckung (Anteil Teilpixel je Block).
+  // Block means with coverage (share of piece pixels per block).
   function patchBlocks(lab, mask, P, b) {
     const n = P / b;
     const mean = new Float32Array(n * n * 3);
@@ -110,8 +112,8 @@
     return cur;
   }
 
-  // Bereitet ein analysiertes Teil für den Vergleich vor. color: Abbildung
-  // der Fotofarben auf die Vorlage (je Kanal a·x + b).
+  // Prepares an analysed piece for the comparison. color: mapping of the photo
+  // colours onto the reference (per channel a·x + b).
   function preparePiece(raw, C, G, color) {
     const { P } = raw;
     const n = P * P;
@@ -139,7 +141,7 @@
     return [r === 0, c === ref.cols - 1, r === ref.rows - 1, c === 0];
   }
 
-  // Seitenart, die nach Drehung um k in Richtung d zeigt.
+  // Side type that points in direction d after rotating by k.
   function sideAt(sides, d, k) {
     return sides[(d - k + 4) % 4];
   }
@@ -154,10 +156,10 @@
     return pen;
   }
 
-  // Abweichung nach bester linearer Angleichung je Kanal (q ≈ a·p + b).
-  // Spiegelungen, Farbstich und Belichtung des Schachtelfotos verschieben
-  // Farben lokal; die Struktur des Motivs bleibt. acc: je Kanal
-  // [Sp, Sq, Spp, Spq, Sqq], dazu Gewichtssumme sw.
+  // Residual after the best linear fit per channel (q ≈ a·p + b).
+  // Reflections, colour cast and exposure of the box photo shift colours
+  // locally; the structure of the motif stays. acc: per channel
+  // [Sp, Sq, Spp, Spq, Sqq], plus the weight sum sw.
   const GAIN = [
     [0.6, 1.7],
     [0.3, 1.7],
@@ -177,12 +179,12 @@
     return Math.max(0, r) / sw;
   }
   const RAW_WEIGHT = 0.3;
-  // Bildabstand im Verhältnis statt absolut (logit = −BETA·ln e): Unschärfe
-  // oder Farbstich der Vorlage machen alle Abstände größer, das Verhältnis
-  // bester zu zweitbester Platz bleibt aussagekräftig.
+  // Image distance as a ratio instead of absolute (logit = −BETA·ln e): blur
+  // or colour cast of the reference make all distances larger, the ratio of
+  // best to second best place stays meaningful.
   const BETA = 8;
 
-  // Grobsuche über alle Plätze, Drehungen und Viertelzell-Versätze.
+  // Coarse search over all places, rotations and quarter-cell offsets.
   function coarseSearch(prep, sides, ref, free, keep) {
     const { blocks, cols, rows, G } = ref;
     const bw = blocks.w;
@@ -190,6 +192,7 @@
     const n = prep.rots[0].blocks.n;
     const res = [];
     for (let k = 0; k < 4; k++) {
+      if (prep.allowRot && !prep.allowRot[k]) continue;
       const { mean, cov } = prep.rots[k].blocks;
       for (let r = 0; r < rows; r++) {
         for (let c = 0; c < cols; c++) {
@@ -244,7 +247,7 @@
     return res.slice(0, keep);
   }
 
-  // Pixelvergleich um die Zelle herum, ± eine Viertelzelle.
+  // Pixel comparison around the cell, ± a quarter cell.
   function fineScore(prep, ref, cand) {
     const { C, G, W, H, lab: rl, cols } = ref;
     const { lab, mask } = prep.rots[cand.rot];
@@ -307,16 +310,36 @@
     return { ...cand, e: best.e, ox: best.ox, oy: best.oy };
   }
 
-  // Kandidaten eines Teils: grob über alles, fein über die besten.
-  function candidates(prep, sides, ref, free) {
+  // Candidates of a piece: coarse over everything, fine over the best.
+  // must: places with rotation that are always compared finely (e.g. from
+  // feature points), even if the coarse search does not rank them high.
+  function candidates(prep, sides, ref, free, must = []) {
     const coarse = coarseSearch(prep, sides, ref, free, 40);
+    for (const m of must) {
+      if (free && !free[m.cell]) continue;
+      if (coarse.some((c) => c.cell === m.cell && c.rot === m.rot)) continue;
+      const r = Math.floor(m.cell / ref.cols);
+      const c = m.cell % ref.cols;
+      const pen = borderPenalty(sides, r, c, m.rot, ref);
+      if (pen <= 1) coarse.push({ cell: m.cell, rot: m.rot, coarse: Infinity, pen });
+    }
     const fine = coarse.map((c) => fineScore(prep, ref, c));
     fine.sort((a, b) => a.e - b.e);
     return fine;
   }
 
-  // Schrittweise Zuordnung: immer das sicherste Teil zuerst, dann gelten
-  // seine Seiten als Randbedingung für die Nachbarplätze.
+  // Feature points that RANSAC maps onto the same place: random pairs hardly
+  // ever agree, from about six the place is as good as certain. Measured on
+  // artificial photos with a known solution.
+  function featBonus(inliers) {
+    return Math.max(0, Math.min(FEAT_MAX, (inliers - FEAT_MIN) * FEAT_STEP));
+  }
+  const FEAT_MIN = 3;
+  const FEAT_STEP = 1.5;
+  const FEAT_MAX = 10;
+
+  // Stepwise assignment: always the surest piece first, then its sides act as
+  // constraints for the neighbouring places.
   function assign(pieces, ref, opts = {}) {
     const { cols, rows } = ref;
     const N = cols * rows;
@@ -325,9 +348,9 @@
     for (const f of opts.filled ?? []) taken[f] = 1;
     for (const [key, v] of opts.holes ?? []) constraint.set(key, v);
     const minConf = opts.minConf ?? 0.6;
-    // Wie beim Puzzeln von Hand: zuerst Rand und Plätze neben schon liegenden
-    // Teilen, dort prüfen Nase und Loch mit. Mitten im Leeren nur bei sehr
-    // eindeutigem Bild.
+    // As when solving by hand: first the border and places next to pieces
+    // already placed, where knob and hole help check. In the middle of
+    // nowhere only with a very clear picture.
     const minConfIsolated = opts.minConfIsolated ?? 0.85;
     const anchored = (cell) => {
       const r = Math.floor(cell / cols);
@@ -357,11 +380,13 @@
             topo += sd < 0.05 ? 1.5 : sd < 0.1 ? 0.5 : -1;
           } else topo += 0.3;
         }
-        scored.push({ ...cd, logit: -BETA * Math.log(cd.e + 10) + topo });
+        const f = p.feat;
+        const feat = f && f.cell === cd.cell && f.rot === cd.rot ? featBonus(f.inliers) : 0;
+        scored.push({ ...cd, logit: -BETA * Math.log(cd.e + 10) + topo + feat });
       }
       if (!scored.length) return null;
       scored.sort((a, b) => b.logit - a.logit);
-      // Mehrere Drehungen am selben Platz zählen als ein Platz.
+      // Several rotations at the same place count as one place.
       const free = N - taken.reduce((a, b) => a + b, 0);
       const other = scored[scored.length - 1].logit - 1 + Math.log(Math.max(1, free - scored.length));
       let z = Math.exp(other - scored[0].logit);

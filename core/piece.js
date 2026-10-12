@@ -1,5 +1,6 @@
-// Form eines einzelnen Puzzleteils aus seiner Außenkontur: die vier Ecken des
-// Kernquadrats, die Lage im Foto und je Seite Nase (out), Loch (in) oder glatt.
+// Shape of a single puzzle piece from its outer contour: the four corners of
+// the core square, the position in the photo and per side knob (out), hole
+// (in) or flat.
 (() => {
   globalThis.PH ??= {};
   const PH = globalThis.PH;
@@ -42,7 +43,7 @@
     });
   }
 
-  // Gerade durch Punkte (Hauptachse), als Punkt + Richtung.
+  // Line through points (principal axis), as point + direction.
   function fitLine(pts) {
     let mx = 0;
     let my = 0;
@@ -75,8 +76,8 @@
     return [x1 + dx1 * t, y1 + dy1 * t];
   }
 
-  // Vorherrschende Kantenrichtung modulo 90°: die geraden Stücke aller vier
-  // Seiten teilen sie, die runden Nasen verteilen sich über alle Winkel.
+  // Dominant edge direction modulo 90°: the straight parts of all four sides
+  // share it, the round knobs spread over all angles.
   function dominantAngle(tan, straight) {
     const hist = new Float64Array(90);
     for (let i = 0; i < tan.length; i++) {
@@ -96,7 +97,7 @@
     return (best + 0.5 + off) * DEG;
   }
 
-  // Stärkste Häufung von Koordinaten in [lo, hi], gewichtet.
+  // Strongest weighted cluster of coordinates in [lo, hi].
   function peak(vals, weights, lo, hi) {
     const n = Math.max(1, Math.ceil(hi - lo));
     const hist = new Float64Array(n + 1);
@@ -117,7 +118,7 @@
     return { at: lo + best, weight: bestV };
   }
 
-  function analyzeContour(raw) {
+  function analyzeContour(raw, prior) {
     if (raw.length < 20) return null;
     let pts = raw;
     if (PH.geom.polygonArea(pts) < 0) pts = [...pts].reverse();
@@ -128,7 +129,7 @@
       per += Math.hypot(b[0] - a[0], b[1] - a[1]);
     }
     const step = Math.max(0.75, per / 900);
-    // Pixelketten sind treppig: über ~2 px glätten, Tangente über ±4 px.
+    // Pixel chains are jagged: smooth over ~2 px, tangent over ±4 px.
     pts = smoothClosed(arcResample(pts, step), 2 / step);
     const n = pts.length;
     const area = PH.geom.polygonArea(pts);
@@ -141,7 +142,7 @@
       const b = pts[(i + k) % n];
       tan[i] = Math.atan2(b[1] - a[1], b[0] - a[0]);
     }
-    // Geradheit: Tangente ändert sich über ±5 % der Seitenlänge kaum.
+    // Straightness: the tangent barely changes over ±5 % of the side length.
     const kk = Math.max(2, Math.round((0.05 * s0) / step));
     const straight = new Float64Array(n);
     for (let i = 0; i < n; i++) {
@@ -166,7 +167,7 @@
       miny = Math.min(miny, ry[i]);
       maxy = Math.max(maxy, ry[i]);
     }
-    // Gewichte für waagrechte bzw. senkrechte gerade Stücke im gedrehten Bild.
+    // Weights for horizontal and vertical straight parts in the rotated image.
     const wh = new Float64Array(n);
     const wv = new Float64Array(n);
     for (let i = 0; i < n; i++) {
@@ -183,8 +184,8 @@
     const lef = peak(rx, wv, minx, minx + 0.42 * w);
     const rig = peak(rx, wv, maxx - 0.42 * w, maxx);
 
-    // Je Seite eine Gerade durch die geraden Stücke nahe der Spitze; echte
-    // Teile sind keine exakten Quadrate, die Seiten dürfen etwas schief sein.
+    // Per side a line through the straight parts near the extreme; real
+    // pieces are not exact squares, the sides may be slightly skewed.
     const band = Math.max(2, s0 * 0.05);
     const sideLine = (pk, vals, ws) => {
       const sel = [];
@@ -203,16 +204,141 @@
       for (let i = 0; i < 4; i++) corners.push(intersect(lines[(i + 3) % 4], lines[i]));
       if (corners.every(Boolean)) best = finish(pts, corners, area);
     }
-    // Zweiter Weg, wenn die Geraden nicht überzeugen: scharfe 90°-Ecken mit
-    // geraden Schenkeln suchen und die beste Vierer-Kombination nehmen.
+    // Second way if the lines are not convincing: look for sharp 90° corners
+    // with straight legs and take the best combination of four.
     if (!best || best.quality < 0.6) {
       const alt = cornerCombos(pts, step, s0, area);
       if (alt && (!best || alt.quality > best.quality)) best = alt;
     }
+    // Third way for pieces with big knobs and wavy cuts, where hardly anything
+    // straight is left. Only with a known core size: with an estimated size
+    // the edges often land on a knob or hole instead of the core.
+    if (prior && (!best || best.quality < 0.1)) {
+      const pq = projectionQuad(pts, prior);
+      const fill = pq ? PH.geom.polygonArea(pq) / area : 0;
+      if (fill > 0.5 && fill < 1.8) {
+        const alt = finish(pts, pq, area, 0.59);
+        if (alt && (!best || alt.quality > best.quality)) best = alt;
+      }
+    }
     return best;
   }
 
-  function finish(pts, corners, area) {
+  // Pixel centres inside the polygon, as [x0, y0, x1, y1, …].
+  function fillPoly(poly) {
+    let y0 = Infinity;
+    let y1 = -Infinity;
+    for (const [, y] of poly) {
+      y0 = Math.min(y0, y);
+      y1 = Math.max(y1, y);
+    }
+    const px = [];
+    for (let y = Math.ceil(y0); y <= y1; y++) {
+      const xs = [];
+      for (let i = 0; i < poly.length; i++) {
+        const [ax, ay] = poly[i];
+        const [bx, by] = poly[(i + 1) % poly.length];
+        if (ay <= y === by <= y) continue;
+        xs.push(ax + ((y - ay) / (by - ay)) * (bx - ax));
+      }
+      xs.sort((a, b) => a - b);
+      for (let k = 0; k + 1 < xs.length; k += 2)
+        for (let x = Math.ceil(xs[k]); x <= xs[k + 1]; x++) px.push(x, y);
+    }
+    return px;
+  }
+
+  // Core rectangle from projection profiles: at the right angle the row and
+  // column sums of the piece area jump at every core edge, whether there is
+  // a knob, a hole or nothing. prior: [long, short] side of the core.
+  function projectionQuad(poly, prior) {
+    const px = fillPoly(poly);
+    const np = px.length / 2;
+    if (np < 50) return null;
+    let cx = 0;
+    let cy = 0;
+    for (let i = 0; i < px.length; i += 2) {
+      cx += px[i];
+      cy += px[i + 1];
+    }
+    cx /= np;
+    cy /= np;
+    let R = 0;
+    for (const [x, y] of poly) R = Math.max(R, Math.abs(x - cx), Math.abs(y - cy));
+    R = Math.ceil(R * 1.5) + 4;
+    const pu = new Float64Array(2 * R);
+    const pv = new Float64Array(2 * R);
+    const du = new Float64Array(2 * R);
+    const dv = new Float64Array(2 * R);
+    const project = (deg) => {
+      const c = Math.cos(deg * DEG);
+      const s = Math.sin(deg * DEG);
+      pu.fill(0);
+      pv.fill(0);
+      for (let i = 0; i < px.length; i += 2) {
+        const dx = px[i] - cx;
+        const dy = px[i + 1] - cy;
+        // Split linearly over two bins so the score is smooth in the angle.
+        const fu = dx * c + dy * s + R;
+        const fv = -dx * s + dy * c + R;
+        const iu = Math.floor(fu);
+        const iv = Math.floor(fv);
+        pu[iu] += 1 - (fu - iu);
+        pu[iu + 1] += fu - iu;
+        pv[iv] += 1 - (fv - iv);
+        pv[iv + 1] += fv - iv;
+      }
+      for (let i = 2; i < 2 * R - 2; i++) {
+        du[i] = pu[i + 1] + pu[i] - pu[i - 1] - pu[i - 2];
+        dv[i] = pv[i + 1] + pv[i] - pv[i - 1] - pv[i - 2];
+      }
+    };
+    // Edge pair at distance L0 (± 8 %).
+    const paired = (d, L0) => {
+      let best = { lo: R, hi: R, score: -Infinity };
+      for (let L = Math.round(L0 * 0.92); L <= Math.round(L0 * 1.08); L++) {
+        for (let i = 2; i + L < 2 * R - 2; i++) {
+          const sc = d[i] - d[i + L];
+          if (sc > best.score) best = { lo: i, hi: i + L, score: sc };
+        }
+      }
+      return best;
+    };
+    const fit = (deg) => {
+      project(deg);
+      let best = null;
+      for (const [a, b] of [prior, [prior[1], prior[0]]]) {
+        const eu = paired(du, a);
+        const ev = paired(dv, b);
+        if (!best || eu.score + ev.score > best.score) best = { deg, eu, ev, score: eu.score + ev.score };
+      }
+      return best;
+    };
+    let best = null;
+    for (let d = 0; d < 90; d++) {
+      const r = fit(d);
+      if (!best || r.score > best.score) best = r;
+    }
+    const d0 = best.deg;
+    for (let d = d0 - 0.75; d <= d0 + 0.75; d += 0.25) {
+      const r = fit(d);
+      if (r.score > best.score) best = r;
+    }
+    const c = Math.cos(best.deg * DEG);
+    const s = Math.sin(best.deg * DEG);
+    // Bin i stands for u = i - R; the jump lies between bins i - 1 and i.
+    const at = (u, v) => [
+      cx + (u - R - 0.5) * c - (v - R - 0.5) * s,
+      cy + (u - R - 0.5) * s + (v - R - 0.5) * c,
+    ];
+    const { eu, ev } = best;
+    if (eu.hi - eu.lo < 4 || ev.hi - ev.lo < 4) return null;
+    return [at(eu.lo, ev.lo), at(eu.hi, ev.lo), at(eu.hi, ev.hi), at(eu.lo, ev.hi)];
+  }
+
+  // shapeQ: shape quality given from outside (projection way); otherwise from
+  // the quadrilateral and the corner fit.
+  function finish(pts, corners, area, shapeQ) {
     const idx = corners.map((q) => nearestIndex(pts, q));
     const sides = [];
     for (let i = 0; i < 4; i++)
@@ -224,8 +350,8 @@
         dist(corners[2], corners[3]) +
         dist(corners[3], corners[0])) /
       4;
-    const fit = cornerFit(pts, idx, corners, side);
-    // Eine Nase ist nie flacher als 0,1 und nie tiefer als 0,5 Seiten.
+    const q = shapeQ ?? quadQuality(corners, area) * cornerFit(pts, idx, corners, side);
+    // A knob is never flatter than 0.1 and never deeper than 0.5 sides.
     const plaus = sides.every((x) => x.depth < 0.1 || (x.depth > 0.12 && x.depth < 0.55)) ? 1 : 0.5;
     return {
       corners,
@@ -237,11 +363,11 @@
         (corners[0][0] + corners[1][0] + corners[2][0] + corners[3][0]) / 4,
         (corners[0][1] + corners[1][1] + corners[2][1] + corners[3][1]) / 4,
       ],
-      quality: quadQuality(corners, area) * fit * plaus,
+      quality: q * plaus,
     };
   }
 
-  // Liegt die Kontur nahe jeder Ecke auf beiden Kanten des Vierecks?
+  // Does the contour near every corner lie on both edges of the quadrilateral?
   function cornerFit(pts, idx, corners, side) {
     const n = pts.length;
     const span = Math.max(3, Math.round(n * 0.04));
@@ -304,7 +430,7 @@
           for (let d = c + 1; d < m; d++) {
             const q = [top[a], top[b], top[c], top[d]].map((i) => pts[i]);
             if (quadQuality(q, area) < 0.3) continue;
-            // Startecke wie beim Geradenweg: die links oben im eigenen Rahmen.
+            // Start corner as in the line way: top left in its own frame.
             const r = finish(pts, q, area);
             if (!r) continue;
             const cs = (score[top[a]] + score[top[b]] + score[top[c]] + score[top[d]]) / 4;
@@ -334,7 +460,7 @@
     return best;
   }
 
-  // 0 … 1: wie sehr das Kernviereck einem Quadrat gleicht und zur Fläche passt.
+  // 0 … 1: how much the core quadrilateral resembles a square and fits the area.
   function quadQuality(q, area) {
     const L = [0, 1, 2, 3].map((i) => dist(q[i], q[(i + 1) % 4]));
     const ratio = Math.min(...L) / Math.max(...L);
@@ -356,9 +482,9 @@
 
   const PROFILE_N = 24;
 
-  // Seitenform im Sehnenrahmen: u entlang der Sehne (0 … 1), v nach außen,
-  // beides in Seitenlängen. Daraus Art (Nase/Loch/glatt) und ein Profil zum
-  // Vergleichen zweier Seiten.
+  // Side shape in the chord frame: u along the chord (0 … 1), v outwards,
+  // both in side lengths. From that the type (knob/hole/flat) and a profile
+  // for comparing two sides.
   function sideShape(pts, i0, i1, a, b) {
     const n = pts.length;
     const seg = [];
@@ -408,8 +534,8 @@
     return { type, depth, atU, len: L, profile };
   }
 
-  // Passen zwei Seiten zusammen? Seite b läuft gegengleich, ihre Nase ist
-  // das Loch von a: Punkt k von a gegen Punkt N-1-k von b mit u → 1-u, v → -v.
+  // Do two sides fit together? Side b runs the opposite way, its knob is the
+  // hole of a: point k of a against point N-1-k of b with u → 1-u, v → -v.
   function sideDistance(a, b) {
     if (a.type === 0 || b.type === 0 || a.type === b.type) return Infinity;
     let s = 0;
@@ -422,8 +548,8 @@
     return Math.sqrt(s / PROFILE_N) + Math.abs(Math.log(a.len / b.len)) * 0.5;
   }
 
-  // Seite eines Teils gegen den Umriss einer Lücke: gleiche Laufrichtung,
-  // die Kurven müssen sich decken.
+  // Side of a piece against the outline of a gap: same direction, the curves
+  // must coincide.
   function holeDistance(a, h) {
     if (a.type !== h.type) return Infinity;
     let s = 0;
@@ -431,5 +557,14 @@
     return Math.sqrt(s / PROFILE_N);
   }
 
-  PH.piece = { analyzeContour, sideDistance, holeDistance, sideShape, PROFILE_N, arcResample, smoothClosed };
+  PH.piece = {
+    analyzeContour,
+    projectionQuad,
+    sideDistance,
+    holeDistance,
+    sideShape,
+    PROFILE_N,
+    arcResample,
+    smoothClosed,
+  };
 })();
