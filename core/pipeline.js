@@ -265,13 +265,29 @@
     // Without a finished part, large areas that are no assembled group are
     // pieces lying against each other: split at their narrow contacts. The
     // parts get a mask of their own, the shared one holds the neighbours.
-    const loose = [...seg.pieces];
+    const A = seg.pieceArea;
+    const quality = (c) => PH.piece.analyzeContour(c, bodyPrior(board, ref, c, A))?.quality ?? 0;
+    const loose = [];
+    // Two pieces touching are still below the size of a large area: split
+    // too large outlines if every part has a better piece shape.
+    for (const p of seg.pieces) {
+      const parts = !p.touches && p.area > 1.3 * A ? PH.segment.splitBlob(cv, p.contour, A) : null;
+      if (parts?.length > 1 && parts.every((q) => q.area > 0.4 * A)) {
+        const whole = Math.max(quality(p.contour), p.alt ? quality(p.alt) : 0);
+        if (parts.every((q) => quality(q.contour) >= whole)) {
+          for (const q of parts)
+            loose.push({ contour: q.contour, area: q.area, touches: false, alt: null, own: true });
+          continue;
+        }
+      }
+      loose.push(p);
+    }
     if (!board)
       for (const b of seg.big) {
         if (groups.some((g) => g.big === b)) continue;
-        const parts = PH.segment.splitBlob(cv, b.contour, seg.pieceArea) ?? [b];
+        const parts = PH.segment.splitBlob(cv, b.contour, A) ?? [b];
         for (const q of parts) {
-          if (q.area > 0.4 * seg.pieceArea && q.area < 2.2 * seg.pieceArea) {
+          if (q.area > 0.4 * A && q.area < 2.2 * A) {
             const touches = q.contour.some(([x, y]) => x <= 1 || y <= 1 || x >= w - 2 || y >= h - 2);
             loose.push({ contour: q.contour, area: q.area, touches, alt: null, own: true });
           } else unclear.push({ outline: simplify(q.contour, 3), area: q.area, reason: 'merged' });
