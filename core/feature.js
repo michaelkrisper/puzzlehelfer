@@ -132,7 +132,7 @@
   // part, the loose pieces and the groups. Each point is matched against the
   // reference only when someone asks for it, and only once.
   function sceneFeatures(cv, gray, mask) {
-    const sets = detect(cv, gray, mask).map((s) => ({
+    const sets = detectTiled(cv, gray, mask).map((s) => ({
       ...s,
       best: new Int32Array(s.pts.length / 2).fill(-2),
     }));
@@ -142,6 +142,82 @@
         for (const s of sets) s.desc.delete();
       },
     };
+  }
+
+  // Large photos (above 4 MP) in overlapping tiles: SIFT doubles the image
+  // internally, a 2800 × 2800 photo then no longer fits into the WASM memory. A point is
+  // kept by the tile whose core holds it; the overlap is wider than a piece.
+  const TILE = 1600;
+  const OVERLAP = 160;
+  function detectTiled(cv, gray, mask) {
+    const W = gray.cols;
+    const H = gray.rows;
+    if (W * H <= 4e6) return detect(cv, gray, mask);
+    const starts = (n) => {
+      const k = Math.ceil((n - OVERLAP) / (TILE - OVERLAP));
+      const step = (n - TILE) / Math.max(1, k - 1);
+      return Array.from({ length: k }, (_, i) => Math.round(i * step));
+    };
+    const parts = new Map(); // detector → {norm, type, cols, pts, resp, rows}
+    const xs = W > TILE ? starts(W) : [0];
+    const ys = H > TILE ? starts(H) : [0];
+    for (const [iy, y0] of ys.entries()) {
+      for (const [ix, x0] of xs.entries()) {
+        const w = Math.min(TILE, W - x0);
+        const h = Math.min(TILE, H - y0);
+        // Core: up to the middle of the overlap with the neighbouring tiles.
+        const cx0 = ix ? x0 + OVERLAP / 2 : 0;
+        const cy0 = iy ? y0 + OVERLAP / 2 : 0;
+        const cx1 = ix < xs.length - 1 ? x0 + w - OVERLAP / 2 : W;
+        const cy1 = iy < ys.length - 1 ? y0 + h - OVERLAP / 2 : H;
+        const rect = new cv.Rect(x0, y0, w, h);
+        const g = gray.roi(rect);
+        const m = mask.roi(rect);
+        for (const set of detect(cv, g, m)) {
+          const n = set.pts.length / 2;
+          const keep = [];
+          for (let i = 0; i < n; i++) {
+            const x = set.pts[i * 2] + x0;
+            const y = set.pts[i * 2 + 1] + y0;
+            if (x >= cx0 && x < cx1 && y >= cy0 && y < cy1) keep.push(i);
+          }
+          const part = parts.get(set.name) ?? {
+            name: set.name,
+            norm: set.norm,
+            type: set.desc.type(),
+            cols: set.desc.cols,
+            pts: [],
+            resp: [],
+            rows: [],
+          };
+          const float = part.type === cv.CV_32F;
+          const src = float ? set.desc.data32F : set.desc.data;
+          for (const i of keep) {
+            part.pts.push(set.pts[i * 2] + x0, set.pts[i * 2 + 1] + y0);
+            part.resp.push(set.resp[i]);
+            part.rows.push(src.slice(i * part.cols, (i + 1) * part.cols));
+          }
+          parts.set(set.name, part);
+          set.desc.delete();
+        }
+        g.delete();
+        m.delete();
+      }
+    }
+    return [...parts.values()].map((p) => {
+      const n = p.rows.length;
+      const data = p.type === cv.CV_32F ? new Float32Array(n * p.cols) : new Uint8Array(n * p.cols);
+      p.rows.forEach((r, k) => {
+        data.set(r, k * p.cols);
+      });
+      return {
+        name: p.name,
+        norm: p.norm,
+        pts: Float32Array.from(p.pts),
+        resp: Float32Array.from(p.resp),
+        desc: cv.matFromArray(n, p.cols, p.type, data),
+      };
+    });
   }
 
   // Nearest reference point for the points idx of set s (ratio test), stored

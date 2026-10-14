@@ -50,8 +50,16 @@
   // Core size [long, short] of a piece at its position in the photo: table and
   // finished part lie in one plane, so the board mapping knows the cell size
   // there, perspective included. Null without a board.
-  function bodyPrior(board, ref, contour) {
-    if (!board) return null;
+  // Without a finished part: from the typical piece area in the photo (a
+  // piece covers about one cell, knobs and holes cancel out; measured 0.98 to
+  // 1.15) and the cell shape of the grid.
+  function bodyPrior(board, ref, contour, pieceArea) {
+    if (!board) {
+      if (!pieceArea) return null;
+      const ka = Math.max(ref.cellAspect ?? 1, 1 / (ref.cellAspect ?? 1));
+      const a = pieceArea / 1.07;
+      return [Math.sqrt(a * ka), Math.sqrt(a / ka)];
+    }
     let x = 0;
     let y = 0;
     for (const [px, py] of contour) {
@@ -68,6 +76,27 @@
     const w = d([u - h, v], [u + h, v]);
     const t = d([u, v - h], [u, v + h]);
     return [Math.max(w, t), Math.min(w, t)];
+  }
+
+  // Loose pieces lying against each other also form large areas, and their
+  // feature points give some homography. On a real finished part a loose
+  // piece is about one cell large (measured 0.98–1.15), on such a cluster
+  // the scale is far off (6–10).
+  // The finished part also explains most of the large areas (measured 85 to
+  // 93 % of their area in occupied places, such clusters 5–6 %).
+  function plausibleBoard(board, ref, seg) {
+    const { W, H, C } = ref;
+    const [x0, y0] = PH.board.toScene(board, W / 2, H / 2);
+    const [x1, y1] = PH.board.toScene(board, W / 2 + C, H / 2);
+    const [x2, y2] = PH.board.toScene(board, W / 2, H / 2 + C);
+    const cell = Math.abs((x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0));
+    const d = seg.bigMask.data;
+    let big = 0;
+    for (let i = 0; i < d.length; i++) if (d[i]) big++;
+    if (board.filled.length < 0.25 * (big / cell)) return false;
+    if (seg.pieces.length < 3) return true;
+    const k = seg.pieceArea / cell;
+    return k > 0.5 && k < 2;
   }
 
   // Thickness of the finished part at each side of the picture, as a share
@@ -227,13 +256,14 @@
     if (seg.big.length) {
       progress('Fertiger Teil wird auf die Vorlage gelegt …');
       board = PH.board.registerBoard(cv, ref, src, gray, seg.bigMask, sf);
+      if (board && !plausibleBoard(board, ref, seg)) board = null;
       if (board) board.border = borderThickness(board, ref, seg.bigMask);
     }
     const pieces = [];
     const unclear = [];
     progress('Teile werden vermessen …');
     for (const p of seg.pieces) {
-      const prior = p.touches ? null : bodyPrior(board, ref, p.contour);
+      const prior = p.touches ? null : bodyPrior(board, ref, p.contour, seg.pieceArea);
       let shape = p.touches ? null : PH.piece.analyzeContour(p.contour, prior);
       let contour = p.contour;
       if (!p.touches && p.alt) {
