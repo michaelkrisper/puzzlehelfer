@@ -150,7 +150,8 @@ async function setReferenceFile(blob) {
 const crop = {
   quad: null,
   scale: 1,
-  drag: -1,
+  // null, {corner, off} or {edge, start, orig}: what the finger moves.
+  drag: null,
   draw() {
     const cv = $('crop-canvas');
     const { canvas: img } = state.refImg;
@@ -162,7 +163,7 @@ const crop = {
     g.fillStyle = '#0b1016';
     g.fillRect(0, 0, cssW, cssH);
     g.drawImage(img, this.ox, 0, img.width * this.scale, img.height * this.scale);
-    const pts = this.quad.map(([x, y]) => [this.ox + x * this.scale, y * this.scale]);
+    const pts = this.quad.map(([x, y]) => this.toCss(x, y));
     g.fillStyle = '#0008';
     g.beginPath();
     g.rect(0, 0, cssW, cssH);
@@ -182,6 +183,67 @@ const crop = {
       g.strokeStyle = '#fff';
       g.stroke();
     }
+    // Edge handles move a whole side.
+    for (let i = 0; i < 4; i++) {
+      const [x, y] = this.edgeMid(i);
+      const [cx, cy] = this.toCss(x, y);
+      g.beginPath();
+      g.arc(cx, cy, 7, 0, Math.PI * 2);
+      g.fillStyle = '#fff';
+      g.fill();
+      g.strokeStyle = '#4fb3ff';
+      g.lineWidth = 3;
+      g.stroke();
+    }
+    if (this.drag) this.loupe(g, cssW);
+  },
+  // Magnified view of the dragged point above the finger, which covers it.
+  loupe(g, cssW) {
+    const { canvas: img } = state.refImg;
+    const [fx, fy] =
+      this.drag.corner !== undefined ? this.quad[this.drag.corner] : this.edgeMid(this.drag.edge);
+    const D = 130;
+    const k = this.scale * 4; // CSS pixels per image pixel in the loupe
+    const [px, py] = this.toCss(fx, fy);
+    // Above the finger; near the top beside it, towards the middle (below
+    // would be under the hand).
+    const above = py - D * 0.95 > D / 2;
+    const lx = Math.max(D / 2 + 4, Math.min(cssW - D / 2 - 4, above ? px : px < cssW / 2 ? px + D : px - D));
+    const ly = above ? py - D * 0.95 : Math.max(D / 2 + 4, py);
+    const map = ([x, y]) => [lx + (x - fx) * k, ly + (y - fy) * k];
+    g.save();
+    g.beginPath();
+    g.arc(lx, ly, D / 2, 0, Math.PI * 2);
+    g.clip();
+    g.fillStyle = '#0b1016';
+    g.fillRect(lx - D / 2, ly - D / 2, D, D);
+    g.drawImage(img, fx - D / 2 / k, fy - D / 2 / k, D / k, D / k, lx - D / 2, ly - D / 2, D, D);
+    g.strokeStyle = '#4fb3ff';
+    g.lineWidth = 1.5;
+    poly(g, this.quad.map(map));
+    g.stroke();
+    g.strokeStyle = '#fff';
+    g.lineWidth = 1;
+    g.beginPath();
+    g.moveTo(lx - 10, ly);
+    g.lineTo(lx + 10, ly);
+    g.moveTo(lx, ly - 10);
+    g.lineTo(lx, ly + 10);
+    g.stroke();
+    g.restore();
+    g.beginPath();
+    g.arc(lx, ly, D / 2, 0, Math.PI * 2);
+    g.strokeStyle = '#fff';
+    g.lineWidth = 2;
+    g.stroke();
+  },
+  edgeMid(i) {
+    const a = this.quad[i];
+    const b = this.quad[(i + 1) % 4];
+    return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  },
+  toCss(x, y) {
+    return [this.ox + x * this.scale, y * this.scale];
   },
   toImg(e) {
     const r = $('crop-canvas').getBoundingClientRect();
@@ -190,28 +252,49 @@ const crop = {
 };
 $('crop-canvas').addEventListener('pointerdown', (e) => {
   const p = crop.toImg(e);
-  let best = -1;
-  let bd = (40 / crop.scale) ** 2;
+  const near = (q, r) => (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2 < (r / crop.scale) ** 2;
+  let drag = null;
+  let bd = Infinity;
   crop.quad.forEach((q, i) => {
     const d = (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2;
-    if (d < bd) {
+    if (near(q, 40) && d < bd) {
       bd = d;
-      best = i;
+      // Keep the offset to the finger: the corner does not jump under it.
+      drag = { corner: i, off: [q[0] - p[0], q[1] - p[1]] };
     }
   });
-  crop.drag = best;
-  if (best >= 0) e.target.setPointerCapture(e.pointerId);
+  if (!drag)
+    for (let i = 0; i < 4; i++)
+      if (near(crop.edgeMid(i), 32))
+        drag = { edge: i, start: p, orig: [[...crop.quad[i]], [...crop.quad[(i + 1) % 4]]] };
+  crop.drag = drag;
+  if (drag) {
+    e.target.setPointerCapture(e.pointerId);
+    crop.draw();
+  }
 });
 $('crop-canvas').addEventListener('pointermove', (e) => {
-  if (crop.drag < 0) return;
+  const d = crop.drag;
+  if (!d) return;
   const { width: w, height: h } = state.refImg.image;
+  const clamp = ([x, y]) => [Math.max(0, Math.min(w, x)), Math.max(0, Math.min(h, y))];
   const [x, y] = crop.toImg(e);
-  crop.quad[crop.drag] = [Math.max(0, Math.min(w, x)), Math.max(0, Math.min(h, y))];
+  if (d.corner !== undefined) crop.quad[d.corner] = clamp([x + d.off[0], y + d.off[1]]);
+  else {
+    const dx = x - d.start[0];
+    const dy = y - d.start[1];
+    crop.quad[d.edge] = clamp([d.orig[0][0] + dx, d.orig[0][1] + dy]);
+    crop.quad[(d.edge + 1) % 4] = clamp([d.orig[1][0] + dx, d.orig[1][1] + dy]);
+  }
   crop.draw();
 });
-$('crop-canvas').addEventListener('pointerup', () => {
-  crop.drag = -1;
-});
+const cropUp = () => {
+  if (!crop.drag) return;
+  crop.drag = null;
+  crop.draw();
+};
+$('crop-canvas').addEventListener('pointerup', cropUp);
+$('crop-canvas').addEventListener('pointercancel', cropUp);
 $('crop-full').addEventListener('click', () => {
   const { width: w, height: h } = state.refImg.image;
   crop.quad = [

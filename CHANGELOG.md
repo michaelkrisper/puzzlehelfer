@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Cropping the reference: handles in the middle of each side move the whole
+  side, and a magnifier above or beside the finger shows the dragged point.
 - Grid for rectangular pieces: the finished border in a photo is one piece
   thick, its thickness in the reference gives columns and rows (e.g. 12 × 20
   for 240 pieces instead of 14 × 17). The app switches once by itself unless
