@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Two tabs at the bottom like a native app: Vorlage and Teile. The piece
+  count is required and asked for right after cropping; count and grid
+  sit above the preview. Reference preview and map of places zoom with two
+  fingers (finer preview), the page itself never zooms.
 - Assignment checked against a solved photo of a real puzzle (26 verified
   pieces): 18 instead of 15 placed right. Rectangular pieces measured the
   wrong way round no longer lose their right rotation (penalty instead of

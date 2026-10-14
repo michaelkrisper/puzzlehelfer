@@ -35,7 +35,10 @@ const handlers = {
     scenes.clear();
     // New feature points go back to the app, which stores them.
     const fresh = ref.feat !== prev?.feat ? { key: ref.key, feat: ref.feat } : null;
-    return { rgba: ref.rgba.data, W: ref.W, H: ref.H, C: ref.C, cache: fresh };
+    // Finer copy for the views, which can be zoomed.
+    const f = Math.min(3, 1600 / Math.max(ref.W, ref.H));
+    const view = PH.reference.rectify(cv, image, quad, Math.round(ref.W * f), Math.round(ref.H * f));
+    return { rgba: ref.rgba.data, W: ref.W, H: ref.H, C: ref.C, cache: fresh, view };
   },
   scene({ id, sceneId, image }) {
     if (!ref) throw new Error('Keine Vorlage');

@@ -166,14 +166,16 @@ try {
   await shot('2-crop');
   await evaluate(`document.getElementById('crop-ok').click()`);
   await evaluate(`setCount(${count})`);
-  check(await until(`!document.getElementById('step-scene').hidden && state.refView`), 'reference prepared');
+  check(await until(`!document.getElementById('tab-scene').disabled && state.refView`), 'reference prepared');
   check(
     (await evaluate('[state.cols, state.rows].join("x")')) === `${truth.cols}x${truth.rows}`,
     `grid ${truth.cols}×${truth.rows}`,
   );
   await shot('3-reference');
 
-  // 2. Pieces photo
+  // 2. Pieces photo, in the second tab
+  await evaluate(`document.getElementById('tab-scene').click()`);
+  check(await evaluate(`!document.getElementById('step-scene').hidden`), 'tab "Teile" opens');
   await setFile('input[data-scene]:not([capture])', join(fx, 'scene.jpg'));
   check(await until('state.result !== null', 120000), 'pieces photo analysed');
   await wait(300);

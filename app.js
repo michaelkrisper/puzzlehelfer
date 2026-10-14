@@ -80,8 +80,10 @@ async function decode(blob, max) {
   return { canvas: c, image: g.getImageData(0, 0, w, h) };
 }
 
-function sizeCanvas(cv, cssW, cssH) {
-  const dpr = window.devicePixelRatio || 1;
+// density: canvas pixels per CSS pixel, by default the device's; more for
+// pictures that can be zoomed.
+function sizeCanvas(cv, cssW, cssH, density = 0) {
+  const dpr = Math.max(density, window.devicePixelRatio || 1);
   cv.style.height = `${cssH}px`;
   cv.width = Math.round(cssW * dpr);
   cv.height = Math.round(cssH * dpr);
@@ -95,10 +97,10 @@ const state = {
   refBlob: null,
   refImg: null, // {canvas, image}
   quad: null,
-  count: 1000,
+  count: 0, // piece count from the box; required
   cols: 0,
   rows: 0,
-  refView: null, // {canvas, W, H, C}
+  refView: null, // {canvas, view (finer, for zooming), W, H, C}
   featCache: null, // feature points of the reference, see worker.js
   gridManual: false, // columns/rows set with −/+
   gridAuto: false, // grid already taken from a photo
@@ -125,6 +127,8 @@ for (const input of document.querySelectorAll('input[data-ref]')) {
 
 async function setReferenceFile(blob) {
   state.refBlob = blob;
+  // Another puzzle: its piece count is asked for anew.
+  state.count = 0;
   state.refImg = await decode(blob, REF_MAX);
   show('ref-empty', false);
   show('ref-done', false);
@@ -307,6 +311,10 @@ $('crop-full').addEventListener('click', () => {
 });
 $('crop-ok').addEventListener('click', async () => {
   state.quad = crop.quad.map((p) => [...p]);
+  if (!state.count) {
+    askCount();
+    return;
+  }
   const { cols, rows } = gridFor(state.count, quadAspect(state.quad));
   state.cols = cols;
   state.rows = rows;
@@ -331,11 +339,30 @@ async function saveRef() {
   });
 }
 
+// The grid is always based on the piece count (columns × rows follow from it
+// and from the finished border), so it is asked for before anything else.
+function askCount() {
+  show('ref-crop', false);
+  show('ref-empty', false);
+  show('ref-done', true);
+  show('ref-preview', false);
+  show('grid-adjust', false);
+  $('tab-scene').disabled = true;
+  show('count-hint', true);
+  $('count').closest('.count').classList.add('need');
+  updateGridLabels();
+  $('count').focus();
+}
+
 async function applyReference() {
   show('ref-crop', false);
   show('ref-empty', false);
   show('ref-done', true);
-  show('step-scene', true);
+  show('ref-preview', true);
+  show('grid-adjust', true);
+  show('count-hint', false);
+  $('count').closest('.count').classList.remove('need');
+  $('tab-scene').disabled = false;
   updateGridLabels();
   setStatus('Vorlage wird aufbereitet …');
   const r = await call('reference', {
@@ -353,7 +380,11 @@ async function applyReference() {
   c.width = r.W;
   c.height = r.H;
   c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(r.rgba), r.W, r.H), 0, 0);
-  state.refView = { canvas: c, W: r.W, H: r.H, C: r.C };
+  const v = document.createElement('canvas');
+  v.width = r.view.width;
+  v.height = r.view.height;
+  v.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(r.view.data), v.width, v.height), 0, 0);
+  state.refView = { canvas: c, view: v, W: r.W, H: r.H, C: r.C };
   drawRefPreview();
   setStatus('');
   // New grid: re-analyse existing photos.
@@ -365,11 +396,12 @@ async function applyReference() {
 
 function drawRefPreview() {
   const cv = $('ref-canvas');
-  const { canvas, W, H, C } = state.refView;
+  const { view, W, H, C } = state.refView;
   const cssW = cv.parentElement.clientWidth;
+  if (!cssW) return;
   const k = cssW / W;
-  const g = sizeCanvas(cv, cssW, H * k);
-  g.drawImage(canvas, 0, 0, W * k, H * k);
+  const g = sizeCanvas(cv, cssW, H * k, Math.min(4, view.width / cssW));
+  g.drawImage(view, 0, 0, W * k, H * k);
   g.strokeStyle = '#ffffff66';
   g.lineWidth = 1;
   g.beginPath();
@@ -385,7 +417,7 @@ function drawRefPreview() {
 }
 
 function updateGridLabels() {
-  $('count').value = state.count;
+  $('count').value = state.count || '';
   $('cols').textContent = state.cols;
   $('rows').textContent = state.rows;
   $('grid-total').textContent = `= ${state.cols * state.rows} Plätze`;
@@ -865,11 +897,12 @@ function label(g, text, x, y, px, color, align) {
 
 function drawMap() {
   const cv = $('map');
-  const { canvas, W, H, C } = state.refView;
+  const { view, W, H, C } = state.refView;
   const cssW = cv.parentElement.clientWidth;
+  if (!cssW) return;
   const k = cssW / W;
-  const g = sizeCanvas(cv, cssW, H * k);
-  g.drawImage(canvas, 0, 0, W * k, H * k);
+  const g = sizeCanvas(cv, cssW, H * k, Math.min(4, view.width / cssW));
+  g.drawImage(view, 0, 0, W * k, H * k);
   const filled = new Set(state.result.scenes.flatMap((s) => s.board?.filled ?? []));
   if (filled.size) {
     g.fillStyle = '#000a';
@@ -1101,6 +1134,101 @@ window.addEventListener('resize', () => {
   if (state.result) renderResult();
 });
 
+// ---------- Tabs ----------
+function showTab(id) {
+  for (const b of document.querySelectorAll('.tabbar [data-tab]')) {
+    const on = b.dataset.tab === id;
+    b.setAttribute('aria-selected', String(on));
+    show(b.dataset.tab, on);
+  }
+  window.scrollTo(0, 0);
+  // Canvas sizes follow the visible width, hidden tabs have none.
+  if (id === 'step-ref' && state.refView && !$('ref-done').hidden) drawRefPreview();
+  if (id === 'step-ref' && !$('ref-crop').hidden && state.refImg) crop.draw();
+  if (id === 'step-scene' && state.result) renderResult();
+}
+for (const b of document.querySelectorAll('.tabbar [data-tab]'))
+  b.addEventListener('click', () => {
+    if (!b.disabled) showTab(b.dataset.tab);
+  });
+
+// ---------- Zoom in pictures ----------
+// Two fingers zoom, one finger pans once zoomed (before that it scrolls the
+// page), double tap toggles; the mouse wheel zooms on a desktop. CSS
+// transform of the canvas inside its clipping frame.
+function zoomable(cv) {
+  const z = { s: 1, x: 0, y: 0, pts: new Map(), moved: false, tap: 0 };
+  const frame = cv.parentElement;
+  const apply = () => {
+    const w = frame.clientWidth;
+    const h = cv.clientHeight;
+    z.s = Math.min(6, Math.max(1, z.s));
+    z.x = Math.min(0, Math.max(w - w * z.s, z.x));
+    z.y = Math.min(0, Math.max(h - h * z.s, z.y));
+    cv.style.transformOrigin = '0 0';
+    cv.style.transform = z.s > 1 ? `translate(${z.x}px, ${z.y}px) scale(${z.s})` : '';
+    cv.style.touchAction = z.s > 1.01 ? 'none' : 'pan-y';
+  };
+  const at = (k, px, py) => {
+    z.x = px - (px - z.x) * k;
+    z.y = py - (py - z.y) * k;
+    z.s *= k;
+  };
+  const snap = () => {
+    const ps = [...z.pts.values()];
+    const n = ps.length;
+    return {
+      n,
+      cx: ps.reduce((a, p) => a + p[0], 0) / (n || 1),
+      cy: ps.reduce((a, p) => a + p[1], 0) / (n || 1),
+      d: n > 1 ? Math.hypot(ps[0][0] - ps[1][0], ps[0][1] - ps[1][1]) : 0,
+    };
+  };
+  cv.addEventListener('pointerdown', (e) => {
+    cv.setPointerCapture(e.pointerId);
+    z.pts.set(e.pointerId, [e.clientX, e.clientY]);
+    z.moved = z.pts.size > 1;
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (!z.pts.has(e.pointerId)) return;
+    const prev = snap();
+    z.pts.set(e.pointerId, [e.clientX, e.clientY]);
+    const now = snap();
+    if (prev.n !== now.n || (now.n === 1 && z.s <= 1.01)) return;
+    z.moved = true;
+    const r = frame.getBoundingClientRect();
+    at(now.n > 1 && prev.d > 0 ? now.d / prev.d : 1, prev.cx - r.left, prev.cy - r.top);
+    z.x += now.cx - prev.cx;
+    z.y += now.cy - prev.cy;
+    apply();
+  });
+  const up = (e) => {
+    if (!z.pts.delete(e.pointerId) || z.pts.size || z.moved) return;
+    const t = performance.now();
+    if (t - z.tap < 300) {
+      const r = frame.getBoundingClientRect();
+      at(z.s > 1.5 ? 1 / z.s : 2.5, e.clientX - r.left, e.clientY - r.top);
+      apply();
+      z.tap = 0;
+    } else z.tap = t;
+  };
+  cv.addEventListener('pointerup', up);
+  cv.addEventListener('pointercancel', up);
+  cv.addEventListener(
+    'wheel',
+    (e) => {
+      e.preventDefault();
+      const r = frame.getBoundingClientRect();
+      at(Math.exp(-e.deltaY * 0.002), e.clientX - r.left, e.clientY - r.top);
+      apply();
+    },
+    { passive: false },
+  );
+  apply();
+}
+zoomable($('ref-canvas'));
+zoomable($('map'));
+
 // ---------- Start ----------
 (async () => {
   try {
@@ -1115,6 +1243,7 @@ window.addEventListener('resize', () => {
       state.gridManual = saved.gridManual ?? false;
       state.featCache = await load('feat');
       await applyReference();
+      showTab('step-scene');
     }
   } catch (err) {
     console.warn(err);

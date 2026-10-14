@@ -20,19 +20,21 @@ no photo leaves the device. The app's interface is in German.
 1. **Reference:** take a photo of the finished picture (box lid or poster) or
    pick an image, e.g. from the manufacturer. The app finds the picture
    corners itself; drag them with a finger if needed.
-2. **Piece count:** tap or type it. The grid follows from count and aspect
-   ratio; correct it with −/+ if needed. Rectangular pieces (e.g. 12 × 20 for
-   240) are recognised from the finished border in the first photo.
-3. **Photograph pieces:** picture side up, a little apart, straight from
+2. **Piece count** (required, usually printed on the box): tap or type it.
+   Columns × rows follow from count and aspect ratio; rectangular pieces
+   (e.g. 12 × 20 for 240) are recognised from the finished border in the
+   first photo. Correct it with −/+ if needed.
+3. Switch to the **Teile** tab at the bottom.
+4. **Photograph pieces:** picture side up, a little apart, straight from
    above. The half-finished puzzle may be in the photo, and it helps a lot:
    occupied places, colour calibration and the exact geometry come from it.
-4. Result: every recognised piece has a **number**, a **curved arrow** shows
+5. Result: every recognised piece has a **number**, a **curved arrow** shows
    direction and degrees of rotation. If the half-finished puzzle is in the
    photo, a **straight arrow** points at the place. Pieces you have already
    joined into a group get a **letter** and are placed as a whole. Below, the
    places are marked on the reference. Tap a piece to see it rotated next to
    its place.
-5. Put pieces in, **new round**, photograph again. Every placed piece gives
+6. Put pieces in, **new round**, photograph again. Every placed piece gives
    the app more gaps to work with.
 
 Several photos per round are possible (more pieces or close-ups). A piece
