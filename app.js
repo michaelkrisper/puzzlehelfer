@@ -66,8 +66,35 @@ async function load(key) {
 }
 
 // ---------- Images ----------
+// Some browsers cannot read every image through createImageBitmap; the
+// <img> element is the second way. Formats the browser cannot open at all
+// (HEIC in Chrome) end in an error with a readable message.
+async function bitmapOf(blob) {
+  try {
+    return await createImageBitmap(blob);
+  } catch {
+    const url = URL.createObjectURL(blob);
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+      return await createImageBitmap(img);
+    } catch {
+      const kind = blob.type || blob.name?.split('.').pop() || 'unbekannt';
+      const heic = /hei[cf]/i.test(kind) || /\.hei[cf]$/i.test(blob.name ?? '');
+      throw new Error(
+        heic
+          ? 'HEIC-Fotos (vom iPhone) kann dieser Browser nicht öffnen. Als JPEG speichern oder direkt mit der App fotografieren.'
+          : `Der Browser kann dieses Bild nicht öffnen (${kind}).`,
+      );
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+}
+
 async function decode(blob, max) {
-  const bmp = await createImageBitmap(blob);
+  const bmp = await bitmapOf(blob);
   const f = Math.min(1, max / Math.max(bmp.width, bmp.height));
   const w = Math.round(bmp.width * f);
   const h = Math.round(bmp.height * f);
@@ -121,7 +148,15 @@ for (const input of document.querySelectorAll('input[data-ref]')) {
   input.addEventListener('change', async () => {
     const file = input.files[0];
     input.value = '';
-    if (file) await setReferenceFile(file);
+    if (!file) return;
+    show('ref-error', false);
+    try {
+      await setReferenceFile(file);
+    } catch (err) {
+      console.error(err);
+      $('ref-error').textContent = err.message;
+      show('ref-error', true);
+    }
   });
 }
 
@@ -478,7 +513,14 @@ for (const input of document.querySelectorAll('input[data-scene]')) {
   input.addEventListener('change', async () => {
     const files = [...input.files];
     input.value = '';
-    for (const f of files) await addScene(f);
+    for (const f of files) {
+      try {
+        await addScene(f);
+      } catch (err) {
+        console.error(err);
+        setStatus(`${f.name}: ${err.message}`);
+      }
+    }
   });
 }
 
