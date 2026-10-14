@@ -259,10 +259,27 @@
       if (board && !plausibleBoard(board, ref, seg)) board = null;
       if (board) board.border = borderThickness(board, ref, seg.bigMask);
     }
+    const groups = sf ? locateGroups(cv, ref, sf, seg.big, board) : [];
     const pieces = [];
     const unclear = [];
+    // Without a finished part, large areas that are no assembled group are
+    // pieces lying against each other: split at their narrow contacts. The
+    // parts get a mask of their own, the shared one holds the neighbours.
+    const loose = [...seg.pieces];
+    if (!board)
+      for (const b of seg.big) {
+        if (groups.some((g) => g.big === b)) continue;
+        const parts = PH.segment.splitBlob(cv, b.contour, seg.pieceArea) ?? [b];
+        for (const q of parts) {
+          if (q.area > 0.4 * seg.pieceArea && q.area < 2.2 * seg.pieceArea) {
+            const touches = q.contour.some(([x, y]) => x <= 1 || y <= 1 || x >= w - 2 || y >= h - 2);
+            loose.push({ contour: q.contour, area: q.area, touches, alt: null, own: true });
+          } else unclear.push({ outline: simplify(q.contour, 3), area: q.area, reason: 'merged' });
+        }
+      }
+    let own = null;
     progress('Teile werden vermessen …');
-    for (const p of seg.pieces) {
+    for (const p of loose) {
       const prior = p.touches ? null : bodyPrior(board, ref, p.contour, seg.pieceArea);
       let shape = p.touches ? null : PH.piece.analyzeContour(p.contour, prior);
       let contour = p.contour;
@@ -279,7 +296,14 @@
         unclear.push({ outline, area: p.area, reason: p.touches ? 'edge' : 'shape' });
         continue;
       }
-      const raw = PH.match.extractPatch(cv, src, seg.mask, shape.corners, ref.C, ref.G);
+      let mask = seg.mask;
+      if (p.own) {
+        own ??= cv.Mat.zeros(h, w, cv.CV_8UC1);
+        PH.segment.drawPoly(cv, own, contour);
+        mask = own;
+      }
+      const raw = PH.match.extractPatch(cv, src, mask, shape.corners, ref.C, ref.G);
+      if (p.own) PH.segment.drawPoly(cv, own, contour, 0);
       pieces.push({ shape, raw, outline });
     }
     if (sf && pieces.length) {
@@ -295,15 +319,9 @@
         p.feat = loc[i];
       });
     }
-    const groups = sf ? locateGroups(cv, ref, sf, seg.big, board) : [];
+    own?.delete();
     sf?.delete();
     gray.delete();
-    // Too large blobs without a link to the reference are usually pieces lying
-    // against each other.
-    if (!board)
-      for (const b of seg.big)
-        if (!groups.some((g) => g.big === b))
-          unclear.push({ outline: simplify(b.contour, 3), area: b.area, reason: 'merged' });
     for (const g of groups) delete g.big;
     src.delete();
     seg.mask.delete();

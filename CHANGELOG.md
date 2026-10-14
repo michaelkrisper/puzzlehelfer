@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Pieces lying against each other on the table (no finished part in the
+  photo) are split at their narrow contacts instead of shown as one
+  unclear area. On a photo of all 240 pieces: 31 instead of 26 of 40
+  checked pieces recognised, 17 instead of 15 placed right.
 - Photos of many loose pieces (e.g. all 240 on the table): large photos are
   searched for feature points in tiles (a 2800 × 2800 photo no longer runs
   out of memory), pieces lying against each other are no longer taken for

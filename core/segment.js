@@ -423,13 +423,114 @@
     raw.data.set(rd);
   }
 
+  // Pieces lying against each other touch only at narrow spots. Each piece
+  // body is a maximum of the distance to the blob edge (knobs are too thin
+  // for one); from these markers the blob is flooded from high to low
+  // distance, so the borders fall on the narrow contacts. Result: outlines
+  // of the parts, or null if the blob holds only one body.
+  function splitBlob(cv, contour, pieceArea) {
+    const side = Math.sqrt(pieceArea);
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const [x, y] of contour) {
+      x0 = Math.min(x0, x);
+      y0 = Math.min(y0, y);
+      x1 = Math.max(x1, x);
+      y1 = Math.max(y1, y);
+    }
+    x0 -= 3;
+    y0 -= 3;
+    const w = x1 - x0 + 4;
+    const h = y1 - y0 + 4;
+    const mask = cv.Mat.zeros(h, w, cv.CV_8UC1);
+    drawPoly(
+      cv,
+      mask,
+      contour.map(([x, y]) => [x - x0, y - y0]),
+    );
+    const dist = new cv.Mat();
+    cv.distanceTransform(mask, dist, cv.DIST_L2, 5);
+    // Maxima: no higher distance within 0.3 piece sides, at least 0.22 deep.
+    const r = Math.max(2, Math.round(0.3 * side));
+    const ker = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(2 * r + 1, 2 * r + 1));
+    const dil = new cv.Mat();
+    cv.dilate(dist, dil, ker);
+    const peaks = cv.Mat.zeros(h, w, cv.CV_8UC1);
+    const lab = new cv.Mat();
+    const D = Float32Array.from(dist.data32F);
+    const inside = Uint8Array.from(mask.data);
+    const dl = dil.data32F;
+    const pd = peaks.data;
+    for (let i = 0; i < D.length; i++) if (D[i] >= 0.22 * side && D[i] >= dl[i] - 0.01) pd[i] = 255;
+    const n = cv.connectedComponents(peaks, lab, 8, cv.CV_32S) - 1;
+    const L = Int32Array.from(lab.data32S);
+    for (const m of [mask, dist, ker, dil, peaks, lab]) m.delete();
+    if (n < 2) return null;
+    // Each pixel, by decreasing distance, joins its deepest labelled
+    // neighbour; pixels without one wait for the next sweep.
+    let todo = [];
+    for (let i = 0; i < D.length; i++) if (inside[i] && !L[i]) todo.push(i);
+    todo.sort((a, b) => D[b] - D[a]);
+    for (let pass = 0; pass < 50 && todo.length; pass++) {
+      const next = [];
+      for (const i of todo) {
+        const x = i % w;
+        let best = 0;
+        let bd = -1;
+        for (const j of [i - 1, i + 1, i - w, i + w, i - w - 1, i - w + 1, i + w - 1, i + w + 1]) {
+          if (j < 0 || j >= L.length || Math.abs((j % w) - x) > 1) continue;
+          if (L[j] > 0 && D[j] > bd) {
+            bd = D[j];
+            best = L[j];
+          }
+        }
+        if (best) L[i] = best;
+        else next.push(i);
+      }
+      todo = next;
+    }
+    const parts = [];
+    const rm = new cv.Mat(h, w, cv.CV_8UC1);
+    for (let k = 1; k <= n; k++) {
+      const d = rm.data;
+      for (let i = 0; i < L.length; i++) d[i] = L[i] === k ? 255 : 0;
+      const cs = new cv.MatVector();
+      const hi = new cv.Mat();
+      cv.findContours(rm, cs, hi, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
+      let bi = -1;
+      let ba = 0;
+      for (let i = 0; i < cs.size(); i++) {
+        const ci = cs.get(i);
+        const a = cv.contourArea(ci);
+        ci.delete();
+        if (a > ba) {
+          ba = a;
+          bi = i;
+        }
+      }
+      if (bi >= 0) {
+        const c = cs.get(bi);
+        const pts = [];
+        for (let i = 0; i < c.rows; i++) pts.push([c.data32S[i * 2] + x0, c.data32S[i * 2 + 1] + y0]);
+        parts.push({ contour: pts, area: ba });
+        c.delete();
+      }
+      cs.delete();
+      hi.delete();
+    }
+    rm.delete();
+    return parts;
+  }
+
   // Result: pieces (contour, area), large areas (finished puzzle areas or
   // pieces lying against each other) and the foreground mask.
-  function drawPoly(cv, mat, contour) {
+  function drawPoly(cv, mat, contour, value = 255) {
     const poly = cv.matFromArray(contour.length, 1, cv.CV_32SC2, contour.flat());
     const pv = new cv.MatVector();
     pv.push_back(poly);
-    cv.drawContours(mat, pv, 0, new cv.Scalar(255), -1);
+    cv.drawContours(mat, pv, 0, new cv.Scalar(value), -1);
     poly.delete();
     pv.delete();
   }
@@ -573,5 +674,5 @@
     return { pieces, big, mask, bigMask, pieceArea, threshold: thr };
   }
 
-  PH.segment = { rgbaToLab, segmentScene, backgroundDistance, kmeans, otsu, drawPoly };
+  PH.segment = { rgbaToLab, segmentScene, splitBlob, backgroundDistance, kmeans, otsu, drawPoly };
 })();
