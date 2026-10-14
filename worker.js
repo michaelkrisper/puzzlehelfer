@@ -41,7 +41,13 @@ const handlers = {
     if (!ref) throw new Error('Keine Vorlage');
     const s = PH.pipeline.analyzeScene(cv, image, ref, progressFor(id));
     scenes.set(sceneId, s);
-    return { pieces: s.pieces.length, unclear: s.unclear.length, board: !!s.board };
+    return {
+      pieces: s.pieces.length,
+      unclear: s.unclear.length,
+      board: !!s.board,
+      border: s.board?.border ?? null,
+      aspect: ref.hi.w / ref.hi.h,
+    };
   },
   removeScene({ sceneId }) {
     scenes.delete(sceneId);

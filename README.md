@@ -21,8 +21,8 @@ no photo leaves the device. The app's interface is in German.
    pick an image, e.g. from the manufacturer. The app finds the picture
    corners itself; drag them with a finger if needed.
 2. **Piece count:** tap or type it. The grid follows from count and aspect
-   ratio; correct it with −/+ (puzzles with rectangular pieces, e.g. 12 × 20
-   for 240 pieces, need this).
+   ratio; correct it with −/+ if needed. Rectangular pieces (e.g. 12 × 20 for
+   240) are recognised from the finished border in the first photo.
 3. **Photograph pieces:** picture side up, a little apart, straight from
    above. The half-finished puzzle may be in the photo, and it helps a lot:
    occupied places, colour calibration and the exact geometry come from it.
@@ -136,8 +136,9 @@ After changing app files, bump `VERSION` in [`sw.js`](sw.js).
 - Very plain areas (sky, sea) can hardly be placed from the picture alone.
   The gaps in the half-finished puzzle help here.
 - Puzzles with irregular cuts (no rows and columns) are not supported.
-- The grid is derived from the piece count assuming square pieces; for
-  rectangular pieces set columns and rows with −/+.
+- The grid is first derived from the piece count assuming square pieces.
+  For rectangular pieces it is corrected from the first photo that shows the
+  finished border; without a border set columns and rows with −/+.
 - Analysing a photo takes about 15 s on a mid-range phone (Pixel 4a) and
   needs WebAssembly SIMD (Chrome 91, Safari 16.4, Firefox 89 or newer).
 

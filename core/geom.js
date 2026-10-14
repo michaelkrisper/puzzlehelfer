@@ -82,6 +82,45 @@
   }
 
   // Angle in degrees to (-180, 180].
+  // How badly cols × rows fits the thickness of the finished part per side
+  // (share of picture height for top/bottom, width for left/right, see
+  // pipeline.js), the piece count n and the picture aspect (width/height).
+  // A side that is k pieces thick (k = 1..3) measures k/rows or k/cols, the
+  // product should be close to n, and pieces are rarely longer than 1.5:1.
+  // About 0.01 fits, above 0.03 does not; null without usable sides.
+  function borderCost(n, border, aspect, cols, rows) {
+    const hs = [border?.top, border?.bottom].filter((t) => t > 0);
+    const vs = [border?.left, border?.right].filter((t) => t > 0);
+    const sides = hs.length + vs.length;
+    if (!sides) return null;
+    const fit = (ts, d) =>
+      ts.reduce((e, t) => {
+        const k = t * d;
+        const kk = Math.max(1, Math.min(3, Math.round(k)));
+        return e + ((k - kk) / kk) ** 2;
+      }, 0);
+    const piece = Math.abs(Math.log((aspect * rows) / cols));
+    return (
+      (fit(hs, rows) + fit(vs, cols)) / sides +
+      2 * ((cols * rows - n) / n) ** 2 +
+      5 * Math.max(0, piece - Math.log(1.5)) ** 2
+    );
+  }
+
+  // The best grid for borderCost, or null if none fits.
+  function gridFromBorder(n, border, aspect) {
+    let best = null;
+    for (let rows = 2; rows <= n / 2; rows++) {
+      for (const cols of new Set([Math.floor(n / rows), Math.ceil(n / rows)])) {
+        if (cols < 2) continue;
+        const cost = borderCost(n, border, aspect, cols, rows);
+        if (cost === null) return null;
+        if (!best || cost < best.cost) best = { cols, rows, cost };
+      }
+    }
+    return best && best.cost < 0.03 ? best : null;
+  }
+
   function wrapDeg(a) {
     let r = a % 360;
     if (r <= -180) r += 360;
@@ -97,5 +136,5 @@
     return s / 2;
   }
 
-  PH.geom = { solve, homography, applyH, invertH, gridFor, wrapDeg, polygonArea };
+  PH.geom = { solve, homography, applyH, invertH, gridFor, borderCost, gridFromBorder, wrapDeg, polygonArea };
 })();

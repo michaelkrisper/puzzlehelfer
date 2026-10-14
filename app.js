@@ -1,6 +1,6 @@
 // UI: capture and crop the reference, add pieces photos,
 // draw suggestions with arrows and rotation.
-const { gridFor, applyH } = PH.geom;
+const { gridFor, gridFromBorder, borderCost, applyH } = PH.geom;
 const REF_MAX = 2400;
 const SCENE_MAX = 4000;
 const COUNTS = [100, 200, 300, 500, 1000, 1500, 2000];
@@ -100,6 +100,9 @@ const state = {
   rows: 0,
   refView: null, // {canvas, W, H, C}
   featCache: null, // feature points of the reference, see worker.js
+  gridManual: false, // columns/rows set with −/+
+  gridAuto: false, // grid already taken from a photo
+  gridNote: '',
   scenes: [], // {id, canvas, image, url, busy}
   current: null,
   result: null,
@@ -224,6 +227,7 @@ $('crop-ok').addEventListener('click', async () => {
   const { cols, rows } = gridFor(state.count, quadAspect(state.quad));
   state.cols = cols;
   state.rows = rows;
+  resetGridChoice();
   await saveRef();
   await applyReference();
 });
@@ -240,6 +244,7 @@ async function saveRef() {
     count: state.count,
     cols: state.cols,
     rows: state.rows,
+    gridManual: state.gridManual,
   });
 }
 
@@ -316,11 +321,18 @@ $('count').addEventListener('change', () => {
   const n = Math.round(Number($('count').value));
   if (n >= 4 && n <= 5000) setCount(n);
 });
+function resetGridChoice() {
+  state.gridManual = false;
+  state.gridAuto = false;
+  state.gridNote = '';
+}
+
 async function setCount(n) {
   state.count = n;
   const g = gridFor(n, quadAspect(state.quad));
   state.cols = g.cols;
   state.rows = g.rows;
+  resetGridChoice();
   await saveRef();
   await applyReference();
 }
@@ -328,6 +340,8 @@ for (const b of document.querySelectorAll('[data-adj]')) {
   b.addEventListener('click', async () => {
     const key = b.dataset.adj;
     state[key] = Math.max(2, state[key] + Number(b.dataset.d));
+    state.gridManual = true;
+    state.gridNote = '';
     await saveRef();
     await applyReference();
   });
@@ -364,8 +378,9 @@ async function addScene(file) {
 
 async function analyze(s, thenSolve) {
   setStatus('Teile werden gesucht …');
+  let r = null;
   try {
-    await call('scene', { sceneId: s.id, image: s.image });
+    r = await call('scene', { sceneId: s.id, image: s.image });
     s.busy = false;
     s.error = null;
   } catch (err) {
@@ -374,7 +389,27 @@ async function analyze(s, thenSolve) {
     setStatus(`Foto konnte nicht ausgewertet werden: ${err.message}`);
   }
   renderThumbs();
+  if (await gridFromPhoto(r)) return;
   if (thenSolve) await solve();
+}
+
+// The grid from the piece count assumes square pieces. The finished border
+// in a photo is one piece thick and tells the real grid: switch once (all
+// photos are analysed again), unless the grid was set by hand or already
+// fits.
+async function gridFromPhoto(r) {
+  if (state.gridManual || state.gridAuto || !r?.border) return false;
+  const g = gridFromBorder(state.count, r.border, r.aspect);
+  const now = borderCost(state.count, r.border, r.aspect, state.cols, state.rows);
+  if (!g || now === null || now < 0.01 || g.cost > now / 3) return false;
+  if (g.cols === state.cols && g.rows === state.rows) return false;
+  state.gridAuto = true;
+  state.cols = g.cols;
+  state.rows = g.rows;
+  state.gridNote = `Raster aus dem fertigen Rand bestimmt: ${g.cols} × ${g.rows}.`;
+  await saveRef();
+  await applyReference();
+  return true;
 }
 
 function renderThumbs() {
@@ -494,7 +529,7 @@ async function solve() {
   const maybe = order.filter((s) => s.level === 'maybe').length;
   const unclear = r.scenes.reduce((a, s) => a + s.unclear.length, 0);
   const total = r.suggestions.filter((s) => !s.sameAs).length;
-  let msg = `${total} Teile erkannt: ${sure} sicher, ${maybe} vermutlich zugeordnet.`;
+  let msg = `${state.gridNote ? `${state.gridNote} ` : ''}${total} Teile erkannt: ${sure} sicher, ${maybe} vermutlich zugeordnet.`;
   const groups = r.scenes.reduce((a, s) => a + (s.groups?.length ?? 0), 0);
   if (groups) msg += ` ${groups} zusammengesteckte ${groups === 1 ? 'Gruppe' : 'Gruppen'} zugeordnet.`;
   if (unclear) msg += ` ${unclear} Flecken unklar (berühren sich Teile?).`;
@@ -994,6 +1029,7 @@ window.addEventListener('resize', () => {
       state.count = saved.count;
       state.cols = saved.cols;
       state.rows = saved.rows;
+      state.gridManual = saved.gridManual ?? false;
       state.featCache = await load('feat');
       await applyReference();
     }

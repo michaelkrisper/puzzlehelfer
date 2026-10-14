@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Grid for rectangular pieces: the finished border in a photo is one piece
+  thick, its thickness in the reference gives columns and rows (e.g. 12 × 20
+  for 240 pieces instead of 14 × 17). The app switches once by itself unless
+  the grid was set with −/+.
+- Reference corners: of nearly equally large outlines the one that follows
+  the edges best wins, and a plain band on one side (a poster's title bar) is
+  no longer cut off as a box margin.
 - Much faster, above all on phones (Pixel 4a: about 16 s per photo instead
   of about 2 min): OpenCV 4.14 with WebAssembly SIMD and only the needed
   modules (6.6 MB instead of 11), feature points detected once per photo,

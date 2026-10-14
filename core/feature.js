@@ -277,7 +277,18 @@
         ((f.c * x - f.s * y + f.tx) * W) / hi.w,
         ((f.s * x + f.c * y + f.ty) * H) / hi.h,
       ];
-      return { cell: row * cols + col, rot, inliers: f.inliers, angle: f.angle, at: [u, v], toRef };
+      // Core of the piece in the high-resolution reference, [width, height]:
+      // gives the grid, also for rectangular pieces.
+      let size = null;
+      if (sh?.corners) {
+        const q = sh.corners.map(([x, y]) => [f.c * x - f.s * y + f.tx, f.s * x + f.c * y + f.ty]);
+        const a = [q[1][0] - q[0][0], q[1][1] - q[0][1]];
+        const b = [q[2][0] - q[1][0], q[2][1] - q[1][1]];
+        const la = Math.hypot(a[0], a[1]);
+        const lb = Math.hypot(b[0], b[1]);
+        size = Math.abs(a[0]) > Math.abs(a[1]) ? [la, lb] : [lb, la];
+      }
+      return { cell: row * cols + col, rot, inliers: f.inliers, angle: f.angle, at: [u, v], toRef, size };
     });
   }
 

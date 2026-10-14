@@ -70,6 +70,59 @@
     return [Math.max(w, t), Math.min(w, t)];
   }
 
+  // Thickness of the finished part at each side of the picture, as a share
+  // of the picture width (left, right) or height (top, bottom): from the
+  // picture edge inwards as long as the photo shows finished puzzle. The
+  // border is one piece thick, so this gives the grid without assuming
+  // square pieces (PH.geom.gridFromBorder). Per side the most frequent run
+  // length, null if it is not frequent enough or the side is missing.
+  function borderThickness(board, ref, bigMask) {
+    const N = 400;
+    const w = bigMask.cols;
+    const h = bigMask.rows;
+    const md = bigMask.data;
+    const inside = (u, v) => {
+      const [x, y] = PH.board.toScene(board, u * ref.W, v * ref.H);
+      const xi = Math.round(x);
+      const yi = Math.round(y);
+      return xi >= 0 && yi >= 0 && xi < w && yi < h && md[yi * w + xi] > 0;
+    };
+    const run = (f) => {
+      let n = 0;
+      while (n < N / 2 && f((n + 0.5) / N)) n++;
+      return n;
+    };
+    const sides = { top: [], bottom: [], left: [], right: [] };
+    for (let k = 4; k < N - 4; k++) {
+      const t = k / N;
+      sides.top.push(run((d) => inside(t, d)));
+      sides.bottom.push(run((d) => inside(t, 1 - d)));
+      sides.left.push(run((d) => inside(d, t)));
+      sides.right.push(run((d) => inside(1 - d, t)));
+    }
+    const out = {};
+    for (const [k, v] of Object.entries(sides)) {
+      const runs = v.filter((x) => x > 0 && x < N / 2);
+      const near = (a, b) => Math.abs(b - a) <= Math.max(1, a * 0.04);
+      let best = 0;
+      let bn = 0;
+      for (const a of runs) {
+        const n = runs.filter((b) => near(a, b)).length;
+        if (n > bn) {
+          bn = n;
+          best = a;
+        }
+      }
+      const sel = runs.filter((b) => near(best, b));
+      // Enough of the side is finished part, and one thickness dominates.
+      out[k] =
+        runs.length >= v.length * 0.3 && bn >= runs.length * 0.25
+          ? sel.reduce((a, b) => a + b, 0) / sel.length / N
+          : null;
+    }
+    return out;
+  }
+
   // Joined groups: large blobs that are not part of the recognised board are
   // searched as a whole in the reference with feature points. Returns per
   // group outline, occupied places, anchor place, rotation and target in the
@@ -174,6 +227,7 @@
     if (seg.big.length) {
       progress('Fertiger Teil wird auf die Vorlage gelegt …');
       board = PH.board.registerBoard(cv, ref, src, gray, seg.bigMask, sf);
+      if (board) board.border = borderThickness(board, ref, seg.bigMask);
     }
     const pieces = [];
     const unclear = [];

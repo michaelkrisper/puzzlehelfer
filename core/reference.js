@@ -87,8 +87,32 @@
       approx.delete();
     }
     for (const m of [fg, k9, fc, fh]) m.delete();
-    cands.sort((a, b) => a.atEdge - b.atEdge || b.area - a.area);
-    const best = cands[0]?.q ?? null;
+    // Share of the outline that lies on an edge. Of nearly equally large
+    // candidates the one that follows the edges best wins: a corner that
+    // strays into the shadow next to a sheet makes the area larger, but its
+    // sides leave the edge.
+    const ed = edges.data;
+    const support = (q) => {
+      let on = 0;
+      let n = 0;
+      for (let k = 0; k < 4; k++) {
+        const [ax, ay] = q[k];
+        const [bx, by] = q[(k + 1) % 4];
+        for (let t = 0.02; t < 0.98; t += 0.01) {
+          const x = Math.round(ax + (bx - ax) * t);
+          const y = Math.round(ay + (by - ay) * t);
+          n++;
+          if (x >= 0 && y >= 0 && x < w && y < h && ed[y * w + x]) on++;
+        }
+      }
+      return on / n;
+    };
+    const pool = cands.filter((c) => !c.atEdge).length ? cands.filter((c) => !c.atEdge) : cands;
+    const maxArea = Math.max(0, ...pool.map((c) => c.area));
+    for (const c of pool) c.support = support(c.q);
+    const close = pool.filter((c) => c.area >= maxArea * 0.9);
+    close.sort((a, b) => b.support - a.support || b.area - a.area);
+    const best = close[0]?.q ?? null;
     for (const m of [src, gray, edges, k, contours, hier]) m.delete();
     return best ? innerPicture(cv, img, orderQuad(best)) : full;
   }
@@ -142,6 +166,9 @@
     const lef = find(colF, W, false);
     const rig = find(colF, W, true);
     if ((bot - top) * (rig - lef) < W * H * 0.3) return quad;
+    // A box margin surrounds the picture; a plain band on one side only (a
+    // title bar on a poster) is part of the picture.
+    if ((top > 0) + (bot < H) + (lef > 0) + (rig < W) < 3) return quad;
     const Hm = PH.geom.homography(
       [
         [0, 0],
