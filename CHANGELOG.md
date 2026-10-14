@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Border first: the button "Nur Rand" shows only the pieces whose place is
+  on the border, and dims the inside of the map, to build the frame.
+  Pieces with a clearly straight side (and clean corners) are compared
+  only with border places, in the one rotation that puts the side
+  outwards; pieces without one never with border places. Thresholds from
+  the measured side depths (straight sides 0.01-0.02, knobs lost to a
+  touching neighbour from 0.03); same results on all test photos, fewer
+  comparisons.
 - Pieces lying against each other on the table (no finished part in the
   photo) are split at their narrow contacts instead of shown as one
   unclear area; also two touching pieces that make one too large outline.

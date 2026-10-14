@@ -136,6 +136,7 @@ const state = {
   current: null,
   result: null,
   allArrows: false,
+  edgeOnly: false,
   selected: null,
 };
 
@@ -627,6 +628,19 @@ $('all-arrows').addEventListener('click', () => {
   drawViewer();
 });
 
+// Build the frame first: only pieces whose place is on the border.
+$('edge-only').addEventListener('click', () => {
+  state.edgeOnly = !state.edgeOnly;
+  $('edge-only').textContent = state.edgeOnly ? 'Alle Teile' : 'Nur Rand';
+  renderResult();
+});
+
+function onEdge(x) {
+  return (
+    x.cell !== null && (x.row === 0 || x.col === 0 || x.row === state.rows - 1 || x.col === state.cols - 1)
+  );
+}
+
 $('new-round').addEventListener('click', async () => {
   for (const s of state.scenes) URL.revokeObjectURL(s.url);
   state.scenes = [];
@@ -747,25 +761,12 @@ function drawViewer() {
   g.scale(view.s, view.s);
   g.drawImage(cur.s.canvas, 0, 0, cur.info.width, cur.info.height);
   const px = 1 / view.s; // one screen unit in image pixels
-  const sugg = state.result.suggestions.filter((x) => x.sceneId === cur.s.id);
+  const sugg = state.result.suggestions.filter(
+    (x) => x.sceneId === cur.s.id && (!state.edgeOnly || onEdge(x)),
+  );
 
-  for (const u of cur.info.unclear) {
-    g.setLineDash([6 * px, 5 * px]);
-    poly(g, u.outline);
-    g.strokeStyle = COLORS.bad;
-    g.lineWidth = 2 * px;
-    g.stroke();
-    g.setLineDash([]);
-  }
+  if (!state.edgeOnly) drawUnclearAndGroups(g, cur.info, px);
   if (cur.info.board) drawFilled(g, cur.info.board, px);
-  for (const gr of cur.info.groups ?? []) {
-    poly(g, gr.outline);
-    g.strokeStyle = `${COLORS.ok}cc`;
-    g.lineWidth = 2 * px;
-    g.stroke();
-    if (gr.target) arrow(g, gr.center, gr.target, COLORS.ok, px);
-    badge(g, gr.center, gr, px);
-  }
   for (const x of sugg) {
     const p = cur.info.pieces[x.index];
     const col = x.cell === null ? COLORS.bad : COLORS[x.level];
@@ -786,6 +787,25 @@ function drawViewer() {
     badge(g, x.center, x, px);
   }
   g.restore();
+}
+
+function drawUnclearAndGroups(g, info, px) {
+  for (const u of info.unclear) {
+    g.setLineDash([6 * px, 5 * px]);
+    poly(g, u.outline);
+    g.strokeStyle = COLORS.bad;
+    g.lineWidth = 2 * px;
+    g.stroke();
+    g.setLineDash([]);
+  }
+  for (const gr of info.groups ?? []) {
+    poly(g, gr.outline);
+    g.strokeStyle = `${COLORS.ok}cc`;
+    g.lineWidth = 2 * px;
+    g.stroke();
+    if (gr.target) arrow(g, gr.center, gr.target, COLORS.ok, px);
+    badge(g, gr.center, gr, px);
+  }
 }
 
 function polyArea(pts) {
@@ -956,11 +976,17 @@ function drawMap() {
     }
   }
   const sugg = state.result.suggestions.filter(
-    (x) => x.sceneId === state.current && x.cell !== null && x.level !== 'bad',
+    (x) =>
+      x.sceneId === state.current && x.cell !== null && x.level !== 'bad' && (!state.edgeOnly || onEdge(x)),
   );
+  if (state.edgeOnly) {
+    // The frame stays bright, the inside is dimmed.
+    g.fillStyle = '#000a';
+    g.fillRect(C * k, C * k, (state.cols - 2) * C * k, (state.rows - 2) * C * k);
+  }
   const fs = Math.max(9, Math.min(14, C * k * 0.55));
   const info = state.result.scenes.find((s) => s.id === state.current);
-  for (const gr of info?.groups ?? []) {
+  for (const gr of state.edgeOnly ? [] : (info?.groups ?? [])) {
     g.fillStyle = `${COLORS.ok}55`;
     for (const cell of gr.cells) {
       const r = Math.floor(cell / state.cols);

@@ -205,7 +205,7 @@
         for (let c = 0; c < cols; c++) {
           if (free && !free[r * cols + c]) continue;
           const bp = borderPenalty(sides, r, c, k, ref);
-          if (bp > 1) continue;
+          if (bp > (prep.strictBorder ? 0 : 1)) continue;
           const pen = bp + rp;
           let best = Infinity;
           for (let dy = -1; dy <= 1; dy++) {
@@ -329,7 +329,7 @@
       const r = Math.floor(m.cell / ref.cols);
       const c = m.cell % ref.cols;
       const bp = borderPenalty(sides, r, c, m.rot, ref);
-      if (bp <= 1)
+      if (bp <= (prep.strictBorder ? 0 : 1))
         coarse.push({ cell: m.cell, rot: m.rot, coarse: Infinity, pen: bp + rotPenalty(prep, m.rot) });
     }
     const fine = coarse.map((c) => fineScore(prep, ref, c));

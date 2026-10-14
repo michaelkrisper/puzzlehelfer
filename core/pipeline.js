@@ -320,7 +320,7 @@
       }
       const raw = PH.match.extractPatch(cv, src, mask, shape.corners, ref.C, ref.G);
       if (p.own) PH.segment.drawPoly(cv, own, contour, 0);
-      pieces.push({ shape, raw, outline });
+      pieces.push({ shape, raw, outline, split: !!p.own });
     }
     if (sf && pieces.length) {
       progress('Merkmalspunkte werden verglichen …');
@@ -418,11 +418,23 @@
     return [flat, !flat, flat, !flat];
   }
 
+  // Every side clearly straight or clearly a knob or hole, corners found
+  // well: then straight sides decide strictly between border, corner and
+  // inner places (60 of 240 places at 12 × 20), and the rotation with them.
+  // Not for parts split off a blob: the cut at the contact looks straight.
+  function clearSides(shape) {
+    if (shape.quality < 0.5) return false;
+    const s = shape.sides;
+    if (!s.every((x) => x.depth < 0.025 || x.depth > 0.15)) return false;
+    return !((s[0].type === 0 && s[2].type === 0) || (s[1].type === 0 && s[3].type === 0));
+  }
+
   function runAssign(items, ref, colors, ctx, progress) {
     for (const [n, it] of items.entries()) {
       if (n % 10 === 0) progress(`Vergleich mit der Vorlage: Teil ${n + 1} von ${items.length} …`);
       it.prep = PH.match.preparePiece(it.raw, ref.C, ref.G, colors[it.scene]);
       it.prep.allowRot = allowedRots(it.shape, ref);
+      it.prep.strictBorder = !it.split && clearSides(it.shape);
       const must = it.feat && it.feat.rot !== null ? [it.feat] : [];
       it.cands = PH.match.candidates(it.prep, it.sides, ref, ctx.free, must);
     }
@@ -513,7 +525,15 @@
     const items = [];
     scenes.forEach((s, si) => {
       s.pieces.forEach((p, pi) => {
-        items.push({ scene: si, index: pi, raw: p.raw, sides: p.shape.sides, shape: p.shape, feat: p.feat });
+        items.push({
+          scene: si,
+          index: pi,
+          raw: p.raw,
+          sides: p.shape.sides,
+          shape: p.shape,
+          feat: p.feat,
+          split: p.split,
+        });
       });
     });
     const dup = findDuplicates(items, ref);

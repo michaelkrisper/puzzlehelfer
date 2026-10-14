@@ -208,6 +208,14 @@ try {
   check(wrongSure === 0, `no wrong sure suggestions (${wrongSure})`);
   await evaluate(`document.getElementById('result').scrollIntoView()`);
   await shot('4-result');
+  // Frame first: only pieces with a place on the border.
+  await evaluate(`document.getElementById('edge-only').click()`);
+  check(
+    await evaluate(`state.edgeOnly && document.getElementById('edge-only').textContent === 'Alle Teile'`),
+    'border-only view switches on',
+  );
+  await shot('4-border');
+  await evaluate(`document.getElementById('edge-only').click()`);
   // Zoom in: degree labels and arrows must become readable.
   const clip = await evaluate(`(() => {
     zoomAt(view.cssW / 2, view.cssH / 2, 2.6);
