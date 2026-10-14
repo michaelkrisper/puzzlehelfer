@@ -84,6 +84,10 @@ void main() {
       if (typeof OffscreenCanvas === 'undefined' || globalThis.PH_NOGPU) return ctx;
       const gl = new OffscreenCanvas(1, 1).getContext('webgl2', { antialias: false, depth: false });
       if (!gl) return ctx;
+      // Software rendering (SwiftShader, llvmpipe) is far slower than WASM.
+      const info = gl.getExtension('WEBGL_debug_renderer_info');
+      const renderer = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
+      if (/swiftshader|llvmpipe|software|basic render/i.test(renderer)) return ctx;
       const prog = (fs) => {
         const p = gl.createProgram();
         for (const [type, src] of [

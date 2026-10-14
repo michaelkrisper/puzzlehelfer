@@ -8,6 +8,8 @@
   the finished part, and without a finished part the piece size comes from
   the typical piece area. Synthetic photos without a finished part: 88
   instead of 45 of 128 pieces found, 94 instead of 86 of 99 right.
+- WebGL2 matching is skipped on software renderers (SwiftShader, llvmpipe),
+  where it was far slower than WASM.
 - Feature matching on the graphics card (WebGL2 in the worker): Pixel 4a
   about 1.8× faster for large sets, a photo 16 s instead of 23 s; same
   results as the WASM module, which stays the fallback (and takes over if
