@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Assignment checked against a solved photo of a real puzzle (26 verified
+  pieces): 18 instead of 15 placed right. Rectangular pieces measured the
+  wrong way round no longer lose their right rotation (penalty instead of
+  exclusion), and the pieces that are not sure share the free places
+  (one place per piece) instead of several pointing at the same place.
 - Cropping the reference: handles in the middle of each side move the whole
   side, and a magnifier above or beside the finger shows the dragged point.
 - Grid for rectangular pieces: the finished border in a photo is one piece

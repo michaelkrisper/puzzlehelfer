@@ -342,7 +342,7 @@
   }
 
   // Rectangular pieces only fit with the long side along the long cell side;
-  // the rotation is then fixed up to 180°.
+  // the other two rotations get a penalty in the comparison (match.js).
   function allowedRots(shape, ref) {
     const ka = ref.cellAspect ?? 1;
     if (Math.abs(Math.log(ka)) < 0.12) return null;

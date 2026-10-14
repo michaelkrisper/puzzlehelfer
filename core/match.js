@@ -146,6 +146,13 @@
     return sides[(d - k + 4) % 4];
   }
 
+  // Rectangular pieces fit with the long side along the long cell side
+  // (prep.allowRot). Wavy pieces with big knobs are often measured the wrong
+  // way round, so the other rotations are only penalised, not excluded.
+  function rotPenalty(prep, k) {
+    return prep.allowRot && !prep.allowRot[k] ? 0.5 : 0;
+  }
+
   function borderPenalty(sides, r, c, k, ref) {
     const bd = borderDirs(r, c, ref);
     let pen = 0;
@@ -192,13 +199,14 @@
     const n = prep.rots[0].blocks.n;
     const res = [];
     for (let k = 0; k < 4; k++) {
-      if (prep.allowRot && !prep.allowRot[k]) continue;
+      const rp = rotPenalty(prep, k);
       const { mean, cov } = prep.rots[k].blocks;
       for (let r = 0; r < rows; r++) {
         for (let c = 0; c < cols; c++) {
           if (free && !free[r * cols + c]) continue;
-          const pen = borderPenalty(sides, r, c, k, ref);
-          if (pen > 1) continue;
+          const bp = borderPenalty(sides, r, c, k, ref);
+          if (bp > 1) continue;
+          const pen = bp + rp;
           let best = Infinity;
           for (let dy = -1; dy <= 1; dy++) {
             for (let dx = -1; dx <= 1; dx++) {
@@ -320,8 +328,9 @@
       if (coarse.some((c) => c.cell === m.cell && c.rot === m.rot)) continue;
       const r = Math.floor(m.cell / ref.cols);
       const c = m.cell % ref.cols;
-      const pen = borderPenalty(sides, r, c, m.rot, ref);
-      if (pen <= 1) coarse.push({ cell: m.cell, rot: m.rot, coarse: Infinity, pen });
+      const bp = borderPenalty(sides, r, c, m.rot, ref);
+      if (bp <= 1)
+        coarse.push({ cell: m.cell, rot: m.rot, coarse: Infinity, pen: bp + rotPenalty(prep, m.rot) });
     }
     const fine = coarse.map((c) => fineScore(prep, ref, c));
     fine.sort((a, b) => a.e - b.e);
@@ -396,6 +405,8 @@
         top,
         conf: 1 / z,
         alts: scored.slice(1, 4).map((s) => ({ ...s, p: Math.exp(s.logit - top.logit) / z })),
+        scored,
+        z,
       };
     };
 
@@ -429,12 +440,101 @@
         constraint.set(`${nr * cols + nc},${(d + 2) % 4}`, { need: -side.type, side });
       }
     }
+    // The pieces left over share the free places: one place per piece, the
+    // most probable combination overall (instead of each piece on its own
+    // best place, where several often want the same one).
+    const rest = [];
     for (const i of open) {
       const ev = evalPiece(pieces[i]);
-      if (ev) result.set(i, ev);
-      else result.delete(i);
+      if (ev) {
+        result.set(i, ev);
+        rest.push(i);
+      } else result.delete(i);
+    }
+    if (rest.length > 1) {
+      const cells = [...new Set(rest.flatMap((i) => result.get(i).scored.map((s) => s.cell)))];
+      const best = rest.map((i) => {
+        const m = new Map();
+        for (const s of result.get(i).scored) if (!m.has(s.cell)) m.set(s.cell, s);
+        return m;
+      });
+      // Cost −ln p; a place outside the candidates costs as much as the
+      // least likely candidate plus a margin.
+      const cost = rest.map((i, r) => {
+        const ev = result.get(i);
+        const lp = (s) => -(s.logit - ev.top.logit) + Math.log(ev.z);
+        const worst = Math.max(...[...best[r].values()].map(lp)) + 5;
+        // Extra columns: no place of its own (the piece keeps its best).
+        return [
+          ...cells.map((c) => (best[r].has(c) ? lp(best[r].get(c)) : worst)),
+          ...rest.map(() => worst + 5),
+        ];
+      });
+      const pick = hungarian(cost);
+      rest.forEach((i, r) => {
+        const ev = result.get(i);
+        const s = best[r].get(cells[pick[r]]);
+        if (!s || s === ev.top) return;
+        const p = Math.exp(s.logit - ev.top.logit) / ev.z;
+        result.set(i, {
+          ...ev,
+          top: s,
+          conf: p,
+          alts: [{ ...ev.top, p: ev.conf }, ...ev.alts.filter((a) => a !== s)].slice(0, 3),
+        });
+      });
     }
     return result;
+  }
+
+  // Minimum-cost assignment of rows to distinct columns (rows ≤ columns),
+  // Hungarian method with potentials. Returns the column per row.
+  function hungarian(a) {
+    const n = a.length;
+    const m = a[0].length;
+    const u = new Float64Array(n + 1);
+    const v = new Float64Array(m + 1);
+    const p = new Int32Array(m + 1);
+    const way = new Int32Array(m + 1);
+    for (let i = 1; i <= n; i++) {
+      p[0] = i;
+      let j0 = 0;
+      const minv = new Float64Array(m + 1).fill(Infinity);
+      const used = new Uint8Array(m + 1);
+      do {
+        used[j0] = 1;
+        const i0 = p[j0];
+        let delta = Infinity;
+        let j1 = 0;
+        for (let j = 1; j <= m; j++) {
+          if (used[j]) continue;
+          const cur = a[i0 - 1][j - 1] - u[i0] - v[j];
+          if (cur < minv[j]) {
+            minv[j] = cur;
+            way[j] = j0;
+          }
+          if (minv[j] < delta) {
+            delta = minv[j];
+            j1 = j;
+          }
+        }
+        for (let j = 0; j <= m; j++) {
+          if (used[j]) {
+            u[p[j]] += delta;
+            v[j] -= delta;
+          } else minv[j] -= delta;
+        }
+        j0 = j1;
+      } while (p[j0] !== 0);
+      do {
+        const j1 = way[j0];
+        p[j0] = p[j1];
+        j0 = j1;
+      } while (j0);
+    }
+    const res = new Int32Array(n);
+    for (let j = 1; j <= m; j++) if (p[j]) res[p[j] - 1] = j - 1;
+    return res;
   }
 
   PH.match = {
