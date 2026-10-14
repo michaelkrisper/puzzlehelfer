@@ -157,14 +157,26 @@
     const hamming = s.norm === cv.NORM_HAMMING;
     // BRISK: 64 bytes; SIFT: 128 floats that are integers 0..255, as bytes.
     const bytes = s.desc.cols;
-    if (PH.knn?.available() && bytes % 16 === 0 && bytes <= 256) {
+    const fits = bytes % 16 === 0 && bytes <= 256;
+    if (fits && (PH.gpu?.available() || PH.knn?.available())) {
       r.u8 ??= hamming ? r.data : Uint8Array.from(r.data);
       const src = hamming ? s.desc.data : s.desc.data32F;
       const q = new Uint8Array(todo.length * bytes);
       todo.forEach((i, k) => {
         q.set(src.subarray(i * bytes, (i + 1) * bytes), k * bytes);
       });
-      const res = PH.knn.knn2(hamming ? 'hamming' : 'l2', q, todo.length, r.u8, r.rows, bytes);
+      const args = [hamming ? 'hamming' : 'l2', q, todo.length, r.u8, r.rows, bytes];
+      let res = null;
+      // Graphics card for large sets (upload and waiting cost more than small
+      // sets take on the CPU); if it fails (it then stays off), the WASM module.
+      if (todo.length * r.rows > 4e6 && PH.gpu?.available()) {
+        try {
+          res = PH.gpu.knn2(...args);
+        } catch (err) {
+          console.warn(err);
+        }
+      }
+      res ??= PH.knn.knn2(...args);
       // Ratio test 0.8 on the distance, for L2 on its square.
       const ratio = hamming ? 0.8 : 0.64;
       todo.forEach((i, k) => {

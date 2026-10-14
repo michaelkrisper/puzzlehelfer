@@ -9,6 +9,7 @@ importScripts(
   'core/match.js',
   'core/board.js',
   'core/knn.js',
+  'core/gpu.js',
   'core/feature.js',
   'core/pipeline.js',
 );
@@ -17,6 +18,7 @@ importScripts(
 const ready = new Promise((resolve) => self.cv.then(resolve)).then((m) => {
   self.cv = m;
   postMessage({ type: 'ready' });
+  setTimeout(() => PH.gpu.warm(), 0);
 });
 
 let ref = null;

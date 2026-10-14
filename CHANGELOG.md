@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Feature matching on the graphics card (WebGL2 in the worker): Pixel 4a
+  about 1.8× faster for large sets, a photo 16 s instead of 23 s; same
+  results as the WASM module, which stays the fallback (and takes over if
+  the driver fails).
 - Two tabs at the bottom like a native app: Vorlage and Teile. The piece
   count is required and asked for right after cropping; count and grid
   sit above the preview. Reference preview and map of places zoom with two

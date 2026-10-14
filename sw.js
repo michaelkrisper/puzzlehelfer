@@ -1,6 +1,6 @@
 // Precache everything; after that the app needs no network.
 // Bump VERSION whenever any of these files changes.
-const VERSION = 'v11';
+const VERSION = 'v12';
 const FILES = [
   './',
   'index.html',
@@ -14,6 +14,7 @@ const FILES = [
   'core/match.js',
   'core/board.js',
   'core/knn.js',
+  'core/gpu.js',
   'core/feature.js',
   'core/pipeline.js',
   'vendor/opencv.js',
