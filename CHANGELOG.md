@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A "finished part" of fewer than 8 places is taken as loose pieces lying
+  together (still located as a group), so the other blobs in the photo
+  get split. HIWIN photos: 1010 instead of 996 recognised, 795 instead of
+  778 placed right.
 - Splitting touching pieces no longer cuts single pieces in half: a piece
   with two opposite holes has a waist; parts below 0.7 piece areas join
   the neighbour they share the longest border with. HIWIN photos (1054

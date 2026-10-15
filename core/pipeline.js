@@ -85,6 +85,9 @@
   // The finished part also explains most of the large areas (measured 85 to
   // 93 % of their area in occupied places, such clusters 5–6 %).
   function plausibleBoard(board, ref, seg) {
+    // A few occupied places are rather loose pieces lying together; as a
+    // group they are still located, and the other blobs get split.
+    if (board.filled.length < 8) return false;
     const { W, H, C } = ref;
     const [x0, y0] = PH.board.toScene(board, W / 2, H / 2);
     const [x1, y1] = PH.board.toScene(board, W / 2 + C, H / 2);
