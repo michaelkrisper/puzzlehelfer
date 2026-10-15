@@ -134,18 +134,30 @@
     }));
     const n = w * h;
     const dist = new Float32Array(n);
+    // Second distance for the dark rims of the pieces: darker than the table,
+    // compared with the table colour in shadow, whose chroma falls with the
+    // lightness. Only used right at the outline (brown fur has the same hue).
+    const shade = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       let best = Infinity;
+      let bestS = Infinity;
       for (const m of model) {
-        const d =
-          ((lab[i * 3] - m.mean[0]) * m.inv[0]) ** 2 +
-          ((lab[i * 3 + 1] - m.mean[1]) * m.inv[1]) ** 2 +
-          ((lab[i * 3 + 2] - m.mean[2]) * m.inv[2]) ** 2;
+        const dl = (lab[i * 3] - m.mean[0]) * m.inv[0];
+        const da = lab[i * 3 + 1] - m.mean[1];
+        const db = lab[i * 3 + 2] - m.mean[2];
+        const d = dl * dl + (da * m.inv[1]) ** 2 + (db * m.inv[2]) ** 2;
         if (d < best) best = d;
+        const f = dl < 0 ? Math.max(0, lab[i * 3] / m.mean[0]) : 1;
+        const ds =
+          dl * dl +
+          ((lab[i * 3 + 1] - f * m.mean[1]) * m.inv[1]) ** 2 +
+          ((lab[i * 3 + 2] - f * m.mean[2]) * m.inv[2]) ** 2;
+        if (ds < bestS) bestS = ds;
       }
       dist[i] = Math.sqrt(best);
+      shade[i] = Math.sqrt(bestS);
     }
-    return { dist, model };
+    return { dist, shade, model };
   }
 
   // Local spread of lightness (7×7): cardboard edges, fur and lettering have a
@@ -537,7 +549,7 @@
 
   function segmentScene(cv, img, lab, opts = {}) {
     const { width: w, height: h } = img;
-    const { dist } = backgroundDistance(lab, w, h);
+    const { dist, shade } = backgroundDistance(lab, w, h);
     const sd = localStd(cv, img);
     const sample = [];
     for (let i = 0; i < dist.length; i += 7) sample.push(Math.min(dist[i], 30));
@@ -589,6 +601,50 @@
     if (weak) {
       addOutlines(cv, img, raw, weak, sd);
       weak.delete();
+    }
+
+    // Dark rim at the outline that is only table in shadow (cardboard edge
+    // and contact shadow): off, within a band of about 3 % of a piece side.
+    const RIM_DL = 25; // lightness steps (0–255) darker than inside
+    let RIM = 0;
+    if (opts.rim !== false) {
+      const cl = new cv.Mat();
+      const st = new cv.Mat();
+      const ce = new cv.Mat();
+      const nc = cv.connectedComponentsWithStats(raw, cl, st, ce, 8, cv.CV_32S);
+      const areas = [];
+      for (let i = 1; i < nc; i++) {
+        const a = st.data32S[i * 5 + 4];
+        if (a > w * h * 0.00004) areas.push(a);
+      }
+      for (const m of [cl, st, ce]) m.delete();
+      areas.sort((a, b) => a - b);
+      const a0 = typicalArea(areas);
+      RIM = a0 ? Math.max(1, Math.min(4, Math.round(0.03 * Math.sqrt(a0)))) : 0;
+    }
+    if (RIM > 0) {
+      const ero = new cv.Mat();
+      const kr = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(2 * RIM + 1, 2 * RIM + 1));
+      cv.erode(raw, ero, kr);
+      // Only where the rim is clearly darker than the piece just inside it
+      // (dark fur at the outline stays).
+      const inner = new cv.Mat(h, w, cv.CV_8UC1);
+      const id = inner.data;
+      const ed0 = ero.data;
+      for (let i = 0; i < id.length; i++) id[i] = ed0[i] ? Math.min(255, lab[i * 3] * 2.55) : 0;
+      const kb = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(4 * RIM + 1, 4 * RIM + 1));
+      cv.dilate(inner, inner, kb);
+      const rd2 = raw.data;
+      const ed = ero.data;
+      const nd = inner.data;
+      for (let i = 0; i < rd2.length; i++)
+        if (rd2[i] && !ed[i] && shade[i] <= tLow && dist[i] > tLow && lab[i * 3] * 2.55 < nd[i] - RIM_DL)
+          rd2[i] = 0;
+      inner.delete();
+      kb.delete();
+      cv.morphologyEx(raw, raw, cv.MORPH_OPEN, k3);
+      ero.delete();
+      kr.delete();
     }
 
     const minArea = w * h * 0.00004;

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Tighter outlines on wooden tables: the dark rim at the edge of a piece
+  (cardboard edge, contact shadow) was counted as piece. Pixels in a band
+  of about 3 % of a piece side that match the table colour in shadow and
+  are clearly darker than the piece just inside are now table. Real
+  photos, 95 verified pieces: 46 instead of 45 right, 43 instead of 39
+  sure, 2 instead of 4 of them wrong.
 - Fewer wrong green suggestions: a border place alone no longer lowers the
   bar for "sure"; it needs feature points on the place or a neighbour
   already placed. Checked on 95 pieces in five real photos (new truth

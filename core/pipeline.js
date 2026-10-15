@@ -37,7 +37,7 @@
       cv,
       small,
       PH.segment.rgbaToLab(small.data, small.width * small.height),
-      { refine: false, outlines: false },
+      { refine: false, outlines: false, rim: false },
     );
     seg.mask.delete();
     seg.bigMask.delete();
