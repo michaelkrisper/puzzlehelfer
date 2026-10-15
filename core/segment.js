@@ -503,9 +503,38 @@
       }
       todo = next;
     }
+    // A piece with two opposite holes has a waist and two maxima: parts below
+    // 0.7 piece areas join the neighbour they share the longest border with
+    // (two halves of a piece share the waist, two pieces only a contact).
+    const area = new Float64Array(n + 1);
+    for (let i = 0; i < L.length; i++) area[L[i]]++;
+    for (;;) {
+      let k = 0;
+      for (let j = 1; j <= n; j++)
+        if (area[j] > 0 && area[j] < 0.7 * pieceArea && (!k || area[j] < area[k])) k = j;
+      if (!k) break;
+      const shared = new Map();
+      for (let i = 0; i < L.length; i++) {
+        if (L[i] !== k) continue;
+        for (const j of [i + 1, i - 1, i + w, i - w]) {
+          const o = L[j];
+          if (o > 0 && o !== k) shared.set(o, (shared.get(o) ?? 0) + 1);
+        }
+      }
+      let into = 0;
+      for (const [o, c] of shared) if (!into || c > shared.get(into)) into = o;
+      if (!into) {
+        area[k] = 0;
+        continue;
+      }
+      for (let i = 0; i < L.length; i++) if (L[i] === k) L[i] = into;
+      area[into] += area[k];
+      area[k] = 0;
+    }
     const parts = [];
     const rm = new cv.Mat(h, w, cv.CV_8UC1);
     for (let k = 1; k <= n; k++) {
+      if (!area[k]) continue;
       const d = rm.data;
       for (let i = 0; i < L.length; i++) d[i] = L[i] === k ? 255 : 0;
       const cs = new cv.MatVector();

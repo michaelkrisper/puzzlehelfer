@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Splitting touching pieces no longer cuts single pieces in half: a piece
+  with two opposite holes has a waist; parts below 0.7 piece areas join
+  the neighbour they share the longest border with. HIWIN photos (1054
+  labelled pieces): 996 instead of 925 recognised, 778 instead of 682
+  placed right; Cats & Kittens and black mat: 67 instead of 61 of 119.
 - Green means right: a suggestion is shown as sure only with independent
   support (feature points on the same place, or an image comparison
   without any rival) and a cleanly measured outline. Measured on 1054
