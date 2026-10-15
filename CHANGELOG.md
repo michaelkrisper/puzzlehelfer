@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fewer wrong green suggestions: a border place alone no longer lowers the
+  bar for "sure"; it needs feature points on the place or a neighbour
+  already placed. Checked on 95 pieces in five real photos (new truth
+  from an all-pieces photo and a close-up): 4 instead of 6 wrong
+  sure, right sure unchanged; synthetic scenes unchanged.
 - Border first: the button "Nur Rand" shows only the pieces whose place is
   on the border, and dims the inside of the map, to build the frame.
   Pieces with a clearly straight side (and clean corners) are compared

@@ -361,10 +361,13 @@
     // already placed, where knob and hole help check. In the middle of
     // nowhere only with a very clear picture.
     const minConfIsolated = opts.minConfIsolated ?? 0.85;
-    const anchored = (cell) => {
+    // The border alone anchors only with feature points on the place: with
+    // 60 border places at 12 × 20 the picture alone is no surer there than
+    // inside (cream and red border pieces went to the wrong border place).
+    const anchored = (cell, feat) => {
       const r = Math.floor(cell / cols);
       const c = cell % cols;
-      if (r === 0 || c === 0 || r === rows - 1 || c === cols - 1) return true;
+      if (feat > 0 && (r === 0 || c === 0 || r === rows - 1 || c === cols - 1)) return true;
       for (let d = 0; d < 4; d++) {
         if (constraint.has(`${cell},${d}`) || taken[(r + DIRS[d][1]) * cols + c + DIRS[d][0]]) return true;
       }
@@ -391,7 +394,7 @@
         }
         const f = p.feat;
         const feat = f && f.cell === cd.cell && f.rot === cd.rot ? featBonus(f.inliers) : 0;
-        scored.push({ ...cd, logit: -BETA * Math.log(cd.e + 10) + topo + feat });
+        scored.push({ ...cd, logit: -BETA * Math.log(cd.e + 10) + topo + feat, feat });
       }
       if (!scored.length) return null;
       scored.sort((a, b) => b.logit - a.logit);
@@ -419,7 +422,7 @@
         const ev = evalPiece(pieces[i]);
         if (!ev) continue;
         result.set(i, ev);
-        const margin = ev.conf - (anchored(ev.top.cell) ? minConf : minConfIsolated);
+        const margin = ev.conf - (anchored(ev.top.cell, ev.top.feat) ? minConf : minConfIsolated);
         if (margin >= 0 && (!pick || margin > pick.margin)) pick = { i, ev, margin };
       }
       if (!pick) break;
