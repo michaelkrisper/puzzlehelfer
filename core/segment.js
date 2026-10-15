@@ -638,8 +638,7 @@
       const ed = ero.data;
       const nd = inner.data;
       for (let i = 0; i < rd2.length; i++)
-        if (rd2[i] && !ed[i] && shade[i] <= tLow && dist[i] > tLow && lab[i * 3] * 2.55 < nd[i] - RIM_DL)
-          rd2[i] = 0;
+        if (rd2[i] && !ed[i] && shade[i] <= tLow && lab[i * 3] * 2.55 < nd[i] - RIM_DL) rd2[i] = 0;
       inner.delete();
       kb.delete();
       cv.morphologyEx(raw, raw, cv.MORPH_OPEN, k3);
