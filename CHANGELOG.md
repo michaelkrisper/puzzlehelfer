@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Green means right: a suggestion is shown as sure only with independent
+  support (feature points on the same place, or an image comparison
+  without any rival) and a cleanly measured outline. Measured on 1054
+  labelled pieces in 40 real photos of another puzzle (Kaggle "Jigsaw
+  Puzzle Pieces", CC BY-SA 4.0): 4 wrong of 437 sure instead of 98 of
+  711; on the Cats & Kittens photos 0 wrong of 41 instead of 2 of 58.
+  The rest is shown as likely.
 - Tighter outlines on wooden tables: the dark rim at the edge of a piece
   (cardboard edge, contact shadow) was counted as piece. Pixels in a band
   of about 3 % of a piece side that match the table colour in shadow and

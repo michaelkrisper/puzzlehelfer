@@ -666,7 +666,7 @@ async function solve() {
     .sort((a, b) => (a.step ?? 1e9) - (b.step ?? 1e9) || b.conf - a.conf);
   order.forEach((s, i) => {
     s.label = i + 1;
-    s.level = s.step && s.conf >= 0.6 ? 'ok' : s.conf >= 0.2 ? 'maybe' : 'bad';
+    s.level = s.sure ? 'ok' : s.conf >= 0.2 ? 'maybe' : 'bad';
   });
   // The same piece on a second photo gets the same number.
   const sceneIds = r.scenes.map((x) => x.id);

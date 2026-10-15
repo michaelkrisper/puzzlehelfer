@@ -140,7 +140,7 @@ export async function evaluate(dir, opts = {}) {
     const rotGood = best.cell !== null && Math.abs(wrap(best.turn - needed)) < 20;
     if (cellGood) cellOk++;
     if (cellGood && rotGood) rotOk++;
-    if (best.step) {
+    if (best.sure ?? best.step) {
       accepted++;
       if (cellGood && rotGood) acceptedOk++;
     }

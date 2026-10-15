@@ -1,6 +1,6 @@
 // Precache everything; after that the app needs no network.
 // Bump VERSION whenever any of these files changes.
-const VERSION = 'v18';
+const VERSION = 'v19';
 const FILES = [
   './',
   'index.html',
