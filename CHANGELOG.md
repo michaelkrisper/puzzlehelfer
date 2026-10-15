@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The plain colour difference counts fully besides the colour-fitted one:
+  the fit alone explains every light, plain area of the reference equally
+  well. HIWIN: 810 instead of 795 right, 566 instead of 513 sure (6
+  wrong); other real photos: 70 instead of 67 right, 48 instead of 41
+  sure, none wrong.
 - A "finished part" of fewer than 8 places is taken as loose pieces lying
   together (still located as a group), so the other blobs in the photo
   get split. HIWIN photos: 1010 instead of 996 recognised, 795 instead of

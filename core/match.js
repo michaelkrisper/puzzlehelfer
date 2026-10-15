@@ -185,7 +185,11 @@
     }
     return Math.max(0, r) / sw;
   }
-  const RAW_WEIGHT = 0.3;
+  // Share of the plain colour difference besides the fitted one. The fit
+  // alone explains every light, plain area of the reference equally well;
+  // on real photos (1173 labelled pieces, also a photographed poster with
+  // colour cast) 1.0 places more pieces right than 0.3.
+  const RAW_WEIGHT = 1.0;
   // Image distance as a ratio instead of absolute (logit = −BETA·ln e): blur
   // or colour cast of the reference make all distances larger, the ratio of
   // best to second best place stays meaningful.
