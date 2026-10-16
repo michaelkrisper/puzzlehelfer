@@ -137,6 +137,7 @@ const state = {
   result: null,
   allArrows: false,
   edgeOnly: false,
+  placed: [], // pieces put in by the user: {sceneId, index, cell, rot}
   selected: null,
 };
 
@@ -423,7 +424,9 @@ async function applyReference() {
   state.refView = { canvas: c, view: v, W: r.W, H: r.H, C: r.C };
   drawRefPreview();
   setStatus('');
-  // New grid: re-analyse existing photos.
+  // New grid: re-analyse existing photos (piece numbers change, so pieces
+  // marked as put in are forgotten).
+  state.placed = [];
   for (const s of state.scenes) s.busy = true;
   renderThumbs();
   for (const s of state.scenes) await analyze(s, false);
@@ -632,6 +635,7 @@ async function removeScene(id) {
   const s = state.scenes.find((x) => x.id === id);
   URL.revokeObjectURL(s.url);
   state.scenes = state.scenes.filter((x) => x.id !== id);
+  state.placed = state.placed.filter((p) => p.sceneId !== id);
   await call('removeScene', { sceneId: id });
   if (state.current === id) state.current = state.scenes.at(-1)?.id ?? null;
   renderThumbs();
@@ -662,7 +666,23 @@ function onEdge(x) {
   );
 }
 
+// Put in: the piece is hidden, its place counts as taken and its sides
+// check the neighbouring places; the next arrow is shown.
+$('detail-placed').addEventListener('click', async () => {
+  const x = state.selected;
+  $('detail').close();
+  if (!x || x.cell === null) return;
+  state.placed.push({ sceneId: x.sceneId, index: x.index, cell: x.cell, rot: x.rot });
+  state.selected = null;
+  await solve();
+});
+$('undo-placed').addEventListener('click', async () => {
+  state.placed.pop();
+  await solve();
+});
+
 $('new-round').addEventListener('click', async () => {
+  state.placed = [];
   for (const s of state.scenes) URL.revokeObjectURL(s.url);
   state.scenes = [];
   state.current = null;
@@ -679,7 +699,10 @@ function setStatus(t) {
 
 async function solve() {
   setStatus('Plätze werden gesucht …');
-  const r = await call('solve');
+  const r = await call('solve', { placed: state.placed });
+  // Pieces put in are hidden; the next arrows move up.
+  r.suggestions = r.suggestions.filter((s) => !s.placed);
+  $('undo-placed').hidden = !state.placed.length;
   // Order: sure pieces in the order they are resolved,
   // then the rest by confidence.
   const order = r.suggestions
@@ -986,7 +1009,10 @@ function drawMap() {
   const k = cssW / W;
   const g = sizeCanvas(cv, cssW, H * k, Math.min(4, view.width / cssW));
   g.drawImage(view, 0, 0, W * k, H * k);
-  const filled = new Set(state.result.scenes.flatMap((s) => s.board?.filled ?? []));
+  const filled = new Set([
+    ...state.result.scenes.flatMap((s) => s.board?.filled ?? []),
+    ...state.placed.map((p) => p.cell),
+  ]);
   if (filled.size) {
     g.fillStyle = '#000a';
     for (let cell = 0; cell < state.cols * state.rows; cell++) {
@@ -1176,6 +1202,7 @@ function openDetail(x, info) {
   drawViewer();
   const p = info.pieces[x.index];
   $('detail-title').textContent = x.cell === null ? 'Kein Platz gefunden' : `Teil ${x.label}`;
+  $('detail-placed').hidden = x.cell === null;
   const pc = $('detail-piece');
   const rc = $('detail-ref');
   pc.width = rc.width = 260;

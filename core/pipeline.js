@@ -575,6 +575,25 @@
           free[c] = 0;
           filled.add(c);
         }
+    // Pieces the user has put in (opts.placed: scene, index, cell, rot): their
+    // places are taken, and their sides are gap sides for the neighbours.
+    const placed = new Map((opts.placed ?? []).map((p) => [`${p.scene}:${p.index}`, p]));
+    holes = [...holes];
+    for (const p of placed.values()) {
+      const piece = scenes[p.scene]?.pieces[p.index];
+      if (!piece) continue;
+      free[p.cell] = 0;
+      filled.add(p.cell);
+      const r = Math.floor(p.cell / ref.cols);
+      const c = p.cell % ref.cols;
+      for (let d = 0; d < 4; d++) {
+        const [dx, dy] = PH.match.DIRS[d];
+        if (r + dy < 0 || c + dx < 0 || r + dy >= ref.rows || c + dx >= ref.cols) continue;
+        const side = PH.match.sideAt(piece.shape.sides, d, p.rot);
+        if (side.type)
+          holes.push([`${(r + dy) * ref.cols + c + dx},${(d + 2) % 4}`, { need: -side.type, side }]);
+      }
+    }
     // With a large finished part, only places right next to it: that is where
     // one builds on, and the gap outlines there check every suggestion
     // (plain-coloured pieces are told apart by shape alone).
@@ -597,6 +616,7 @@
     const items = [];
     scenes.forEach((s, si) => {
       s.pieces.forEach((p, pi) => {
+        if (placed.has(`${si}:${pi}`)) return;
         items.push({
           scene: si,
           index: pi,
@@ -622,45 +642,60 @@
       }
     }
     const evOf = new Map(active.map((it, k) => [it, result.get(k)]));
-    return items.map((it, idx) => {
-      const twin = dup.has(idx) ? items[dup.get(idx)] : null;
-      const ev = evOf.get(twin ?? it);
-      const scene = scenes[it.scene];
-      const base = {
-        scene: it.scene,
-        index: it.index,
-        center: it.shape.center,
-        corners: it.shape.corners,
-        sameAs: twin ? { scene: twin.scene, index: twin.index } : null,
-      };
-      if (!ev) return { ...base, cell: null };
-      // At the edge of a finished part: knobs and holes must fit every
-      // neighbouring gap side, else the piece has no place there.
-      let fit = null;
-      if (atEdge) {
-        fit = gapFit(it.sides, ev.top, gaps);
-        if (fit.bad || !fit.n) return { ...base, cell: null };
-      }
-      // Shown as sure (green) only with independent support: feature points
-      // on the same place, or an image comparison without any rival; and a
-      // cleanly measured outline. Measured on 1054 labelled real pieces:
-      // 99 % of sure suggestions right instead of 86 %.
-      const featOk = !!(it.feat?.inliers && it.feat.cell === ev.top.cell);
-      const sure =
-        !!ev.step &&
-        ev.conf >= 0.6 &&
-        (featOk || ev.conf >= 0.99) &&
-        it.shape.quality >= 0.35 &&
-        (!fit || fit.worst < 0.07);
-      return {
-        ...base,
-        ...describe(ev.top, it, scene, ref),
-        conf: ev.conf,
-        step: ev.step ?? null,
-        sure,
-        alts: ev.alts.map((a) => describe(a, it, scene, ref)),
-      };
-    });
+    const done = [...placed.values()]
+      .filter((p) => scenes[p.scene]?.pieces[p.index])
+      .map((p) => ({
+        scene: p.scene,
+        index: p.index,
+        center: scenes[p.scene].pieces[p.index].shape.center,
+        cell: p.cell,
+        row: Math.floor(p.cell / ref.cols),
+        col: p.cell % ref.cols,
+        rot: p.rot,
+        placed: true,
+      }));
+    return [
+      ...done,
+      ...items.map((it, idx) => {
+        const twin = dup.has(idx) ? items[dup.get(idx)] : null;
+        const ev = evOf.get(twin ?? it);
+        const scene = scenes[it.scene];
+        const base = {
+          scene: it.scene,
+          index: it.index,
+          center: it.shape.center,
+          corners: it.shape.corners,
+          sameAs: twin ? { scene: twin.scene, index: twin.index } : null,
+        };
+        if (!ev) return { ...base, cell: null };
+        // At the edge of a finished part: knobs and holes must fit every
+        // neighbouring gap side, else the piece has no place there.
+        let fit = null;
+        if (atEdge) {
+          fit = gapFit(it.sides, ev.top, gaps);
+          if (fit.bad || !fit.n) return { ...base, cell: null };
+        }
+        // Shown as sure (green) only with independent support: feature points
+        // on the same place, or an image comparison without any rival; and a
+        // cleanly measured outline. Measured on 1054 labelled real pieces:
+        // 99 % of sure suggestions right instead of 86 %.
+        const featOk = !!(it.feat?.inliers && it.feat.cell === ev.top.cell);
+        const sure =
+          !!ev.step &&
+          ev.conf >= 0.6 &&
+          (featOk || ev.conf >= 0.99) &&
+          it.shape.quality >= 0.35 &&
+          (!fit || fit.worst < 0.07);
+        return {
+          ...base,
+          ...describe(ev.top, it, scene, ref),
+          conf: ev.conf,
+          step: ev.step ?? null,
+          sure,
+          alts: ev.alts.map((a) => describe(a, it, scene, ref)),
+        };
+      }),
+    ];
   }
 
   // How a piece at cand (cell, rot) fits the gap sides of the finished part:

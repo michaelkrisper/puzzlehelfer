@@ -89,6 +89,7 @@
           <div class="row">
             <button type="button" class="btn small" id="all-arrows">Alle Pfeile zeigen</button>
             <button type="button" class="btn small" id="edge-only">Nur Rand</button>
+            <button type="button" class="btn small" id="undo-placed" hidden>Rückgängig</button>
           </div>
           <h3>Plätze im Bild</h3>
           <div class="ref-view"><canvas id="map"></canvas></div>
@@ -119,7 +120,10 @@
         </div>
         <p id="detail-text"></p>
         <div id="detail-alts" class="alts"></div>
-        <button type="submit" class="btn primary" value="close">Schließen</button>
+        <div class="row">
+          <button type="button" class="btn" id="detail-placed">Eingesetzt</button>
+          <button type="submit" class="btn primary" value="close">Schließen</button>
+        </div>
       </form>
     </dialog>
 

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- "Eingesetzt" in the piece details: the piece is hidden, its place counts
+  as taken, its knobs and holes become gap sides for the neighbouring
+  places, and the next arrow moves up. "Rückgängig" takes the last one back.
 - Building on the finished part: with a large finished part in the photo,
   only places right next to it are suggested, and a piece is placed only if
   its knobs and holes fit every neighbouring gap side (no forced places).
