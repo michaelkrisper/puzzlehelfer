@@ -694,7 +694,7 @@
           conf: ev.conf,
           step: ev.step ?? null,
           sure,
-          alts: ev.alts.map((a) => describe(a, it, scene, ref)),
+          alts: ev.alts.map((a) => ({ ...describe(a, it, scene, ref), p: a.p })),
         };
       }),
     ];

@@ -412,3 +412,100 @@ dialog h3 {
   border-radius: 6px;
   padding: 0.2rem 0.5rem;
 }
+
+/* Step by step: one piece, its candidate places, put in or skip. */
+.step {
+  margin: 0.6rem 0;
+  padding: 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.step-head {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  margin-bottom: 0.5rem;
+}
+
+.step-body {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+}
+
+#step-piece {
+  width: 120px;
+  height: 120px;
+  border-radius: 8px;
+  background: #0b1016;
+  flex: none;
+}
+
+.cands {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.cand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: #0b1016;
+  color: var(--text);
+  font-size: 0.75rem;
+}
+
+.cand canvas {
+  width: 72px;
+  height: 72px;
+  border-radius: 6px;
+}
+
+.cand.on {
+  border-color: var(--accent);
+}
+
+.step-text {
+  margin: 0.5rem 0;
+}
+
+.piece-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.piece-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  text-align: left;
+}
+
+.piece-row.on {
+  border-color: var(--accent);
+}
+
+.piece-row canvas {
+  width: 52px;
+  height: 52px;
+  border-radius: 6px;
+  flex: none;
+}
+
+.piece-row .no {
+  min-width: 1.6rem;
+  font-weight: bold;
+}

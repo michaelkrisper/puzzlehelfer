@@ -227,6 +227,18 @@ try {
   const z = await send('Page.captureScreenshot', { format: 'png', clip, captureBeyondViewport: true });
   writeFileSync(join(out, '4-zoom.png'), Buffer.from(z.data, 'base64'));
 
+  // Step by step: the surest piece first, its candidate places, skip moves on.
+  check(
+    await evaluate(
+      `!document.getElementById('step').hidden && document.querySelectorAll('#step-cands .cand').length > 0 && document.querySelectorAll('#piece-list .piece-row').length > 0`,
+    ),
+    'step card with candidate places and piece list',
+  );
+  await shot('4-step');
+  const before = await evaluate(`JSON.stringify(state.focus)`);
+  await evaluate(`document.getElementById('step-skip').click()`);
+  check((await evaluate(`JSON.stringify(state.focus)`)) !== before, 'skip goes to the next piece');
+
   // Details of one piece
   await evaluate(`(() => {
     const s = state.result.suggestions.find((x) => x.level === 'ok');

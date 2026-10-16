@@ -81,6 +81,19 @@
         <div id="thumbs" class="thumbs"></div>
         <p id="status" class="status" role="status" aria-live="polite"></p>
         <div id="result" hidden>
+          <div id="step" class="step" hidden>
+            <div class="step-head"><b id="step-title"></b><span id="step-sub" class="muted"></span></div>
+            <div class="step-body">
+              <canvas id="step-piece" width="120" height="120"></canvas>
+              <div id="step-cands" class="cands"></div>
+            </div>
+            <p id="step-text" class="step-text"></p>
+            <div class="row">
+              <button type="button" class="btn primary" id="step-placed">Eingesetzt</button>
+              <button type="button" class="btn" id="step-skip">Überspringen</button>
+              <button type="button" class="btn" id="step-removed">Entfernen</button>
+            </div>
+          </div>
           <div class="viewer-wrap"><canvas id="viewer"></canvas></div>
           <div class="legend">
             <span><i class="sw ok"></i>sicher</span><span><i class="sw maybe"></i>vermutlich</span><span><i class="sw bad"></i>nicht erkannt</span>
@@ -91,6 +104,8 @@
             <button type="button" class="btn small" id="edge-only">Nur Rand</button>
             <button type="button" class="btn small" id="undo-placed" hidden>Rückgängig</button>
           </div>
+          <h3>Alle gefundenen Teile</h3>
+          <div id="piece-list" class="piece-list"></div>
           <h3>Plätze im Bild</h3>
           <div class="ref-view"><canvas id="map"></canvas></div>
           <div class="row">

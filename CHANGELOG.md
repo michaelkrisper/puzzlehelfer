@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Step by step: a card shows one piece at a time, the surest first, turned
+  as it goes in, with its candidate places from the reference; the photo
+  shows only this piece, the arrow to the chosen place and the turn.
+  "Eingesetzt", "Überspringen" (to the end of the queue) or "Entfernen"
+  move on. Below, all found pieces in rows with their candidate places;
+  tapping a row or a piece in the photo picks it. "Alle Pfeile zeigen"
+  switches back to all arrows.
 - "Entfernen" in the piece details: a wrong find (no piece, or a piece
   the app got wrong) is left out and takes no place; "Rückgängig" undoes
   the last "Eingesetzt" or "Entfernen".

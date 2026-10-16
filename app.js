@@ -5,7 +5,7 @@ const REF_MAX = 2400;
 const SCENE_MAX = 4000;
 const COUNTS = [100, 200, 300, 500, 1000, 1500, 2000];
 // Same as VERSION in sw.js; bump both together.
-const APP_VERSION = 'v28';
+const APP_VERSION = 'v29';
 const ARROWS = 6;
 const $ = (id) => document.getElementById(id);
 
@@ -142,6 +142,10 @@ const state = {
   // Pieces marked by the user, in order (for undo): {kind: 'placed' with
   // cell, rot | 'removed' (no piece, or a wrong find), sceneId, index}.
   marks: [],
+  // Step by step: the piece shown and the chosen candidate place; skipped
+  // pieces move to the end of the queue.
+  focus: null, // {sceneId, index, alt}
+  skipped: new Set(),
   selected: null,
 };
 
@@ -696,6 +700,8 @@ $('undo-placed').addEventListener('click', async () => {
 
 $('new-round').addEventListener('click', async () => {
   state.marks = [];
+  state.skipped.clear();
+  state.focus = null;
   for (const s of state.scenes) URL.revokeObjectURL(s.url);
   state.scenes = [];
   state.current = null;
@@ -767,8 +773,159 @@ async function solve() {
   if (r.scenes.some((s) => s.board)) msg += ' Puzzle im Foto gefunden – Pfeile zeigen auf den Platz.';
   setStatus(msg);
   show('result', true);
+  state.queue = order;
   renderResult();
+  renderSteps();
 }
+
+// ---------- Step by step ----------
+const keyOf = (x) => `${x.sceneId}:${x.index}`;
+
+function queue() {
+  const q = state.queue ?? [];
+  return [...q.filter((x) => !state.skipped.has(keyOf(x))), ...q.filter((x) => state.skipped.has(keyOf(x)))];
+}
+
+function focused() {
+  const f = state.focus;
+  return f ? (state.queue ?? []).find((x) => x.sceneId === f.sceneId && x.index === f.index) : null;
+}
+
+// Candidate places of a piece: its place and the alternatives.
+function candsOf(x) {
+  return [{ ...x, p: x.conf }, ...(x.alts ?? []).map((a) => ({ ...a, level: x.level }))];
+}
+
+// The piece turned as it goes in (patch rotated by the candidate's rot).
+function drawPieceTile(cv, x, rot) {
+  const info = state.result.scenes.find((s) => s.id === x.sceneId);
+  const p = info?.pieces[x.index];
+  const g = cv.getContext('2d');
+  g.fillStyle = '#0b1016';
+  g.fillRect(0, 0, cv.width, cv.height);
+  if (!p) return;
+  const tile = document.createElement('canvas');
+  tile.width = tile.height = p.P;
+  tile.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(p.rgba), p.P, p.P), 0, 0);
+  g.save();
+  g.translate(cv.width / 2, cv.height / 2);
+  g.rotate(((rot ?? 0) * Math.PI) / 2);
+  g.drawImage(tile, -cv.width / 2, -cv.height / 2, cv.width, cv.height);
+  g.restore();
+}
+
+function drawCellTile(cv, row, col) {
+  const { canvas, C } = state.refView;
+  const m = C / 4;
+  const g = cv.getContext('2d');
+  g.drawImage(canvas, col * C - m, row * C - m, C + 2 * m, C + 2 * m, 0, 0, cv.width, cv.height);
+  const k = cv.width / (C + 2 * m);
+  g.strokeStyle = '#4fb3ff';
+  g.lineWidth = 2;
+  g.strokeRect(m * k, m * k, C * k, C * k);
+}
+
+function renderSteps() {
+  const q = queue();
+  let x = focused();
+  if (!x) {
+    x = q[0] ?? null;
+    state.focus = x ? { sceneId: x.sceneId, index: x.index, alt: 0 } : null;
+  }
+  show('step', !!x);
+  if (x) {
+    if (x.sceneId !== state.current) {
+      state.current = x.sceneId;
+      renderThumbs();
+      renderResult();
+    }
+    const cands = candsOf(x);
+    const alt = Math.min(state.focus.alt, cands.length - 1);
+    const c = cands[alt];
+    const n = q.indexOf(x) + 1;
+    $('step-title').textContent = `Teil ${x.label}`;
+    $('step-sub').textContent =
+      `${n} von ${q.length}${state.skipped.has(keyOf(x)) ? ' · übersprungen' : ''}${x.level === 'ok' ? ' · sicher' : ''}`;
+    drawPieceTile($('step-piece'), x, c.rot);
+    const box = $('step-cands');
+    box.replaceChildren();
+    cands.forEach((a, i) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = `cand${i === alt ? ' on' : ''}`;
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = 144;
+      drawCellTile(cv, a.row, a.col);
+      const t = document.createElement('span');
+      t.textContent = `R${a.row + 1} S${a.col + 1} · ${Math.round((a.p ?? 0) * 100)} %`;
+      b.append(cv, t);
+      b.addEventListener('click', () => {
+        state.focus.alt = i;
+        renderSteps();
+        drawViewer();
+      });
+      box.append(b);
+    });
+    $('step-text').textContent = `Reihe ${c.row + 1}, Spalte ${c.col + 1}. ${turnText(c.turn)}`;
+  }
+  renderPieceList(q, x);
+  drawViewer();
+}
+
+function renderPieceList(q, cur) {
+  const box = $('piece-list');
+  box.replaceChildren();
+  for (const x of q) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `piece-row${x === cur ? ' on' : ''}`;
+    const no = document.createElement('span');
+    no.className = 'no';
+    no.textContent = x.label;
+    no.style.color = COLORS[x.level];
+    const pc = document.createElement('canvas');
+    pc.width = pc.height = 104;
+    drawPieceTile(pc, x, x.rot);
+    b.append(no, pc);
+    for (const a of candsOf(x).slice(0, 3)) {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = 104;
+      drawCellTile(cv, a.row, a.col);
+      cv.title = `R${a.row + 1} S${a.col + 1} · ${Math.round((a.p ?? 0) * 100)} %`;
+      b.append(cv);
+    }
+    b.addEventListener('click', () => {
+      state.focus = { sceneId: x.sceneId, index: x.index, alt: 0 };
+      renderSteps();
+      $('step').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    box.append(b);
+  }
+}
+
+$('step-placed').addEventListener('click', async () => {
+  const x = focused();
+  if (!x) return;
+  const c = candsOf(x)[state.focus.alt] ?? x;
+  state.marks.push({ kind: 'placed', sceneId: x.sceneId, index: x.index, cell: c.cell, rot: c.rot });
+  state.skipped.delete(keyOf(x));
+  state.focus = null;
+  await solve();
+});
+$('step-skip').addEventListener('click', () => {
+  const x = focused();
+  if (!x) return;
+  state.skipped.add(keyOf(x));
+  state.focus = null;
+  renderSteps();
+});
+$('step-removed').addEventListener('click', async () => {
+  const x = focused();
+  if (!x) return;
+  state.marks.push({ kind: 'removed', sceneId: x.sceneId, index: x.index });
+  state.focus = null;
+  await solve();
+});
 
 // ---------- Draw result ----------
 const COLORS = { ok: '#3ddc84', maybe: '#ffc94d', bad: '#ff6b6b' };
@@ -835,6 +992,12 @@ function drawViewer() {
     g.lineWidth = 2 * px;
     g.stroke();
   }
+  const f = !state.allArrows && focused();
+  if (f && f.sceneId === cur.s.id) {
+    drawFocus(g, cur.info, f, px);
+    g.restore();
+    return;
+  }
   for (const x of sugg) {
     if (x.cell === null || x.level === 'bad' || !x.target) continue;
     // Many arrows cross: by default only the next steps.
@@ -847,6 +1010,20 @@ function drawViewer() {
     badge(g, x.center, x, px);
   }
   g.restore();
+}
+
+// Step by step: only the piece in hand, its place and turn.
+function drawFocus(g, info, f, px) {
+  const c = { ...f, ...candsOf(f)[state.focus.alt] };
+  poly(g, info.pieces[f.index].outline);
+  g.strokeStyle = '#4fb3ff';
+  g.lineWidth = 5 * px;
+  g.stroke();
+  if (c.target && info.board) {
+    arrow(g, f.center, c.target, '#4fb3ff', px);
+    targetMarker(g, { ...c, level: 'ok' }, info.board, px);
+  }
+  badge(g, f.center, c, px);
 }
 
 function drawUnclearAndGroups(g, info, px) {
@@ -1203,7 +1380,10 @@ function tapAt(sx, sy) {
   const hit = state.result.suggestions.find(
     (u) => u.sceneId === cur.s.id && inside(cur.info.pieces[u.index].outline, x, y),
   );
-  if (hit) openDetail(hit, cur.info);
+  if (hit && hit.cell !== null) {
+    state.focus = { sceneId: hit.sceneId, index: hit.index, alt: 0 };
+    renderSteps();
+  } else if (hit) openDetail(hit, cur.info);
 }
 
 // ---------- Details ----------
