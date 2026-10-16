@@ -101,14 +101,18 @@
   // Distance of every pixel to the table model, in standard deviations.
   // Lightness counts half so that cast shadows of pieces do not count as
   // pieces.
-  function backgroundDistance(lab, w, h) {
+  function backgroundDistance(lab, w, h, sd = null) {
     const band = Math.max(4, Math.round(Math.min(w, h) * 0.04));
     const s = [];
+    const ss = [];
+    const px = [];
     for (let y = 0; y < h; y += 3) {
       for (let x = 0; x < w; x += 3) {
         if (x >= band && x < w - band && y >= band && y < h - band) continue;
         const i = (y * w + x) * 3;
         s.push(lab[i], lab[i + 1], lab[i + 2]);
+        px.push(y * w + x);
+        if (sd) ss.push(sd[y * w + x]);
       }
     }
     // The most frequent border colour is the table; further colours only with
@@ -117,10 +121,41 @@
     // (darker planks); rare dark colours are rather brown pieces at the image
     // border.
     const all = kmeans(Float32Array.from(s), 6, 10).sort((a, b) => b.weight - a.weight);
+    // Table or mat is plain, a finished puzzle at the image border (close-up)
+    // has seams and print: the base colour is the frequent and smooth one
+    // (local spread 1–6 on tables and mats, 9–19 on puzzle areas), not simply
+    // the most frequent.
+    if (sd) {
+      const acc = all.map(() => [0, 0]);
+      for (let i = 0; i < ss.length; i++) {
+        let best = 0;
+        let bd = Infinity;
+        for (let j = 0; j < all.length; j++) {
+          const m = all[j].mean;
+          const d = (s[i * 3] - m[0]) ** 2 + (s[i * 3 + 1] - m[1]) ** 2 + (s[i * 3 + 2] - m[2]) ** 2;
+          if (d < bd) {
+            bd = d;
+            best = j;
+          }
+        }
+        acc[best][0]++;
+        acc[best][1] += ss[i];
+      }
+      for (let j = 0; j < all.length; j++) all[j].spread = acc[j][1] / Math.max(1, acc[j][0]);
+      const score = (c) => c.weight / (1 + (c.spread / 5) ** 2);
+      let base = 0;
+      for (let j = 1; j < all.length; j++) if (score(all[j]) > score(all[base])) base = j;
+      all.unshift(...all.splice(base, 1));
+    }
     const sameHue = (c) => Math.hypot(c.mean[1] - all[0].mean[1], c.mean[2] - all[0].mean[2]) < 6;
+    // With the spread known, a further colour far off in lightness must be
+    // plain too: on a black mat, white puzzle areas would otherwise pass as
+    // brighter table (unevenly lit mat and wood grain stay).
+    const plain = (c) => c.spread === undefined || c.spread < 7 || Math.abs(c.mean[0] - all[0].mean[0]) <= 30;
     const clusters = all.filter(
       (c, i) =>
-        i === 0 || (c.weight > 0.05 && sameHue(c) && (c.mean[0] - all[0].mean[0] > -12 || c.weight >= 0.15)),
+        i === 0 ||
+        (c.weight > 0.05 && sameHue(c) && plain(c) && (c.mean[0] - all[0].mean[0] > -12 || c.weight >= 0.15)),
     );
     const model = clusters.map((c) => ({
       mean: c.mean,
@@ -157,7 +192,27 @@
       dist[i] = Math.sqrt(best);
       shade[i] = Math.sqrt(bestS);
     }
-    return { dist, shade, model };
+    // Noise of the table itself: distances of the border samples whose
+    // colour belongs to a table cluster (the border may show a finished
+    // puzzle in a close-up, whose distances say nothing about the table).
+    const tableSet = new Set(clusters);
+    const nd = [];
+    for (let i = 0; i < px.length; i++) {
+      let best = null;
+      let bd = Infinity;
+      for (const c of all) {
+        const d =
+          (s[i * 3] - c.mean[0]) ** 2 + (s[i * 3 + 1] - c.mean[1]) ** 2 + (s[i * 3 + 2] - c.mean[2]) ** 2;
+        if (d < bd) {
+          bd = d;
+          best = c;
+        }
+      }
+      if (tableSet.has(best)) nd.push(dist[px[i]]);
+    }
+    nd.sort((a, b) => a - b);
+    const noise = nd.length ? nd[Math.floor(nd.length / 2)] : null;
+    return { dist, shade, model, noise };
   }
 
   // Local spread of lightness (7×7): cardboard edges, fur and lettering have a
@@ -567,6 +622,18 @@
 
   // Result: pieces (contour, area), large areas (finished puzzle areas or
   // pieces lying against each other) and the foreground mask.
+  // Dashes and lines printed on a puzzle mat: elongated and filling their
+  // rectangle (measured 1.4–2 : 1 and 82–95 % in a photo, longer ones more),
+  // and small (a finished puzzle is a filled rectangle too).
+  // Pieces fill 55–80 % of it because of knobs; a piece with four holes and
+  // no knob fills more but is nearly square (cells up to about 1.3 : 1).
+  function isLine(cv, c, area) {
+    const { width, height } = cv.minAreaRect(c).size;
+    const long = Math.max(width, height);
+    const short = Math.min(width, height);
+    return short > 0 && long / short >= 1.4 && area / (long * short) >= 0.8;
+  }
+
   function drawPoly(cv, mat, contour, value = 255) {
     const poly = cv.matFromArray(contour.length, 1, cv.CV_32SC2, contour.flat());
     const pv = new cv.MatVector();
@@ -578,8 +645,8 @@
 
   function segmentScene(cv, img, lab, opts = {}) {
     const { width: w, height: h } = img;
-    const { dist, shade } = backgroundDistance(lab, w, h);
     const sd = localStd(cv, img);
+    const { dist, shade, noise } = backgroundDistance(lab, w, h, sd);
     const sample = [];
     for (let i = 0; i < dist.length; i += 7) sample.push(Math.min(dist[i], 30));
     // Spread of the table itself at the image border: grain and noise must not
@@ -595,7 +662,7 @@
     band.sort((a, b) => a - b);
     // Median instead of higher quantiles: with densely laid pieces there are
     // pieces in the border band too.
-    const p50 = band[Math.floor(band.length * 0.5)] ?? 1;
+    const p50 = noise ?? band[Math.floor(band.length * 0.5)] ?? 1;
     // Hysteresis: pieces must differ clearly from the table somewhere (high),
     // but their outline extends to the low threshold. Table noise without a
     // clear core is dropped, piece edges do not fray.
@@ -690,6 +757,10 @@
         const c = contours.get(i);
         const area = cv.contourArea(c);
         const parent = hier.data32S[i * 4 + 3];
+        if (parent < 0 && area > minArea && area < 0.01 * w * h && isLine(cv, c, area)) {
+          c.delete();
+          continue;
+        }
         (parent < 0 ? outer : holes).push({ i, area, parent });
         c.delete();
       }

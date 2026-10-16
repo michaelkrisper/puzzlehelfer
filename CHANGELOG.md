@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Puzzle mats: the background is the frequent and plain colour at the image
+  border, not simply the most frequent one (a close-up with finished puzzle
+  at the border lost all loose pieces); table noise only from border pixels
+  of that colour; printed dashes and lines on the mat are no pieces and no
+  longer set the typical piece size.
 - The plain colour difference counts fully besides the colour-fitted one:
   the fit alone explains every light, plain area of the reference equally
   well. HIWIN: 810 instead of 795 right, 566 instead of 513 sure (6
