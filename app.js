@@ -475,6 +475,7 @@ $('count').addEventListener('change', () => {
 function resetGridChoice() {
   state.gridManual = false;
   state.gridAuto = false;
+  state.seamsDone = false;
   state.gridNote = '';
 }
 
@@ -547,8 +548,28 @@ async function analyze(s, thenSolve) {
     setStatus(`Foto konnte nicht ausgewertet werden: ${err.message}`);
   }
   renderThumbs();
+  if (await gridFromSeams(r)) return;
   if (await gridFromPhoto(r)) return;
   if (thenSolve) await solve();
+}
+
+// The seams of a finished part show where the pieces really are: the box
+// picture often shows a little more or less than the puzzle, and the count
+// alone does not fix columns and rows. Adopt corners and grid once, if they
+// fit the piece count and the grid was not set by hand.
+async function gridFromSeams(r) {
+  const g = r?.seams;
+  if (!g || state.gridManual || state.seamsDone || g.shift < 0.15) return false;
+  if (state.count && Math.abs(g.cols * g.rows - state.count) > 0.06 * state.count) return false;
+  state.seamsDone = true;
+  state.gridAuto = true;
+  state.quad = g.quad;
+  state.cols = g.cols;
+  state.rows = g.rows;
+  state.gridNote = `Raster an den Fugen des fertigen Teils ausgerichtet: ${g.cols} × ${g.rows}.`;
+  await saveRef();
+  await applyReference();
+  return true;
 }
 
 // The grid from the piece count assumes square pieces. The finished border

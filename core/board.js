@@ -407,5 +407,109 @@
     return { H, corr, inliers: hit.inliers, filled, holes, color: fitColor(pairs) };
   }
 
-  PH.board = { registerBoard, toScene, fitColor, toGray };
+  // The real piece grid from the seams of the finished part: the box
+  // picture often shows a little more or less than the puzzle, then the grid
+  // laid over the box misses the pieces by a fraction of a place (measured:
+  // rows 0.94 places high, shifted by a third). The scene is mapped into the
+  // reference at F px per reference px; seams are thin dark lines (black-hat),
+  // averaged per column and row over occupied places; per axis the period and
+  // phase with the strongest comb, and the outer edges of the finished part.
+  // Result in places of the current grid, or null if the seams are unclear.
+  function seamGrid(cv, board, ref, sceneGray, bigMask) {
+    const F = 2;
+    const { C, cols, rows } = ref;
+    const W = ref.W * F;
+    const H = ref.H * F;
+    const mx = new Float32Array(W * H);
+    const my = new Float32Array(W * H);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const [sx, sy] = toScene(board, x / F, y / F);
+        mx[y * W + x] = sx;
+        my[y * W + x] = sy;
+      }
+    }
+    const mapX = cv.matFromArray(H, W, cv.CV_32FC1, mx);
+    const mapY = cv.matFromArray(H, W, cv.CV_32FC1, my);
+    const wg = new cv.Mat();
+    const wm = new cv.Mat();
+    cv.remap(sceneGray, wg, mapX, mapY, cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(0));
+    cv.remap(bigMask, wm, mapX, mapY, cv.INTER_NEAREST, cv.BORDER_CONSTANT, new cv.Scalar(0));
+    const k = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5, 5));
+    cv.morphologyEx(wg, wg, cv.MORPH_BLACKHAT, k);
+    const d = Uint8Array.from(wg.data);
+    const m = Uint8Array.from(wm.data);
+    for (const x of [mapX, mapY, wg, wm, k]) x.delete();
+    const filled = new Set(board.filled);
+    const px = new Float64Array(W);
+    const py = new Float64Array(H);
+    const nx = new Float64Array(W);
+    const ny = new Float64Array(H);
+    for (let y = 0; y < H; y++) {
+      const r = Math.floor(y / F / C);
+      for (let x = 0; x < W; x++) {
+        if (!filled.has(r * cols + Math.floor(x / F / C)) || !m[y * W + x]) continue;
+        const v = d[y * W + x];
+        px[x] += v;
+        nx[x]++;
+        py[y] += v;
+        ny[y]++;
+      }
+    }
+    const axis = (p, n, count) => {
+      for (let i = 0; i < p.length; i++) p[i] = n[i] ? p[i] / n[i] : 0;
+      let base = 0;
+      let nb = 0;
+      for (let i = 0; i < p.length; i++)
+        if (n[i]) {
+          base += p[i];
+          nb++;
+        }
+      base /= Math.max(1, nb);
+      const cF = C * F;
+      let best = null;
+      for (let per = 0.85 * cF; per <= 1.15 * cF; per += 0.002 * cF) {
+        for (let ph = 0; ph < per; ph += 0.5) {
+          let sc = 0;
+          let hits = 0;
+          for (let x = ph; x < p.length - 1; x += per) {
+            const i = Math.round(x);
+            if (!n[i]) continue;
+            sc += p[i] + 0.5 * (p[i - 1] + p[i + 1]);
+            hits++;
+          }
+          if (hits < count * 0.4) continue;
+          sc /= hits;
+          if (!best || sc > best.sc) best = { sc, per, ph };
+        }
+      }
+      // Clear comb and a period inside the search range, else no claim.
+      const period = best ? best.per / cF : 0;
+      if (!best || best.sc < 1.2 * 2 * base || period < 0.87 || period > 1.13) return null;
+      // Outer edges of the finished part, snapped to the nearest seams.
+      let lo = -1;
+      let hi = -1;
+      for (let i = 0; i < p.length; i++)
+        if (n[i] > 0.02 * (p.length === W ? H : W)) {
+          if (lo < 0) lo = i;
+          hi = i;
+        }
+      if (lo < 0) return null;
+      const snap = (v) => best.ph + Math.round((v - best.ph) / best.per) * best.per;
+      const a = snap(lo);
+      const b = snap(hi + 1);
+      return {
+        from: a / cF,
+        to: b / cF,
+        n: Math.round((b - a) / best.per),
+        period: best.per / cF,
+        strength: best.sc / (2 * base),
+      };
+    };
+    const gx = axis(px, nx, cols);
+    const gy = axis(py, ny, rows);
+    return gx && gy ? { x: gx, y: gy } : null;
+  }
+
+  PH.board = { registerBoard, toScene, fitColor, toGray, seamGrid };
 })();

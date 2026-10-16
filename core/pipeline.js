@@ -199,7 +199,12 @@
     // Blobs that the board maps onto occupied places are the board itself and
     // need no (expensive) search of their own.
     const onBoard = onBoardTest(board, ref);
-    const cand = big.map((b) => ({ b, out: simplify(b.contour, 3) })).filter((x) => !onBoard(x.out));
+    // A joined group is a few places; a huge area is (part of) the finished
+    // part even where its outline runs along gaps.
+    const cand = big
+      .filter((b) => !board || b.area < 25 * cellArea(board, ref))
+      .map((b) => ({ b, out: simplify(b.contour, 3) }))
+      .filter((x) => !onBoard(x.out));
     if (!cand.length) return [];
     const loc = PH.feature.locatePieces(
       cv,
@@ -284,6 +289,8 @@
       board = PH.board.registerBoard(cv, ref, src, gray, seg.bigMask, sf);
       if (board && !plausibleBoard(board, ref, seg)) board = null;
       if (board) board.border = borderThickness(board, ref, seg.bigMask);
+      if (board && board.filled.length >= 40)
+        board.seams = PH.board.seamGrid(cv, board, ref, gray, seg.bigMask);
     }
     // With a finished part the piece size is known from its places; the
     // blob statistics may have been ruled by crumbs or mat print. Blobs off
@@ -568,6 +575,25 @@
           free[c] = 0;
           filled.add(c);
         }
+    // With a large finished part, only places right next to it: that is where
+    // one builds on, and the gap outlines there check every suggestion
+    // (plain-coloured pieces are told apart by shape alone).
+    const atEdge = filled.size >= 40;
+    if (atEdge) {
+      const { cols, rows } = ref;
+      const next = (c) => {
+        const r = Math.floor(c / cols);
+        const k = c % cols;
+        return (
+          (r > 0 && filled.has(c - cols)) ||
+          (r < rows - 1 && filled.has(c + cols)) ||
+          (k > 0 && filled.has(c - 1)) ||
+          (k < cols - 1 && filled.has(c + 1))
+        );
+      };
+      for (let c = 0; c < N; c++) if (free[c] && !next(c)) free[c] = 0;
+    }
+    const gaps = new Map(holes);
     const items = [];
     scenes.forEach((s, si) => {
       s.pieces.forEach((p, pi) => {
@@ -608,12 +634,24 @@
         sameAs: twin ? { scene: twin.scene, index: twin.index } : null,
       };
       if (!ev) return { ...base, cell: null };
+      // At the edge of a finished part: knobs and holes must fit every
+      // neighbouring gap side, else the piece has no place there.
+      let fit = null;
+      if (atEdge) {
+        fit = gapFit(it.sides, ev.top, gaps);
+        if (fit.bad || !fit.n) return { ...base, cell: null };
+      }
       // Shown as sure (green) only with independent support: feature points
       // on the same place, or an image comparison without any rival; and a
       // cleanly measured outline. Measured on 1054 labelled real pieces:
       // 99 % of sure suggestions right instead of 86 %.
       const featOk = !!(it.feat?.inliers && it.feat.cell === ev.top.cell);
-      const sure = !!ev.step && ev.conf >= 0.6 && (featOk || ev.conf >= 0.99) && it.shape.quality >= 0.35;
+      const sure =
+        !!ev.step &&
+        ev.conf >= 0.6 &&
+        (featOk || ev.conf >= 0.99) &&
+        it.shape.quality >= 0.35 &&
+        (!fit || fit.worst < 0.07);
       return {
         ...base,
         ...describe(ev.top, it, scene, ref),
@@ -623,6 +661,23 @@
         alts: ev.alts.map((a) => describe(a, it, scene, ref)),
       };
     });
+  }
+
+  // How a piece at cand (cell, rot) fits the gap sides of the finished part:
+  // number of gap sides, knob/hole mismatches, worst outline distance.
+  function gapFit(sides, cand, gaps) {
+    let n = 0;
+    let bad = 0;
+    let worst = 0;
+    for (let d = 0; d < 4; d++) {
+      const g = gaps.get(`${cand.cell},${d}`);
+      if (!g) continue;
+      n++;
+      const mine = PH.match.sideAt(sides, d, cand.rot);
+      if (mine.type !== g.need) bad++;
+      else if (g.hole) worst = Math.max(worst, PH.piece.holeDistance(mine, g.hole));
+    }
+    return { n, bad, worst };
   }
 
   // Place, rotation (degrees clockwise, as the piece lies in the photo) and

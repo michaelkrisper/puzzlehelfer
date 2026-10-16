@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Building on the finished part: with a large finished part in the photo,
+  only places right next to it are suggested, and a piece is placed only if
+  its knobs and holes fit every neighbouring gap side (no forced places).
+- Grid from the seams: the box picture often shows a little more or less
+  than the puzzle, and the count alone does not fix columns and rows. The
+  seams of the finished part give the real grid (Great Wave: 36 x 28 instead
+  of 37 x 27, rows shifted by a third of a piece); corners and grid are
+  adopted once, if they fit the piece count.
+- Large areas of the finished part are no longer searched as joined groups
+  (an overview photo took minutes).
 - Large puzzles (1000 pieces, overview photo of the whole puzzle on a mat):
   feature points of the reference from up to 2400 px instead of 1200 (about
   60 instead of 30 px per piece), more of them; with a finished part the

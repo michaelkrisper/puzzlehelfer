@@ -22,15 +22,46 @@ const ready = new Promise((resolve) => self.cv.then(resolve)).then((m) => {
 });
 
 let ref = null;
+let refQuad = null;
 const scenes = new Map(); // id → result of analyzeScene
 
 const progressFor = (id) => (text) => postMessage({ type: 'progress', id, text });
+
+// The reference corners and grid that the seams of a finished part show
+// (in places of the current grid), mapped back onto the reference photo.
+function seamQuad(g) {
+  if (!g || !refQuad) return null;
+  const { W, H, C } = ref;
+  const Hq = PH.geom.homography(
+    [
+      [0, 0],
+      [W, 0],
+      [W, H],
+      [0, H],
+    ],
+    refQuad,
+  );
+  const at = (u, v) => PH.geom.applyH(Hq, u * C, v * C);
+  return {
+    quad: [at(g.x.from, g.y.from), at(g.x.to, g.y.from), at(g.x.to, g.y.to), at(g.x.from, g.y.to)],
+    cols: g.x.n,
+    rows: g.y.n,
+    // Largest correction of a grid line, in places.
+    shift: Math.max(
+      Math.abs(g.x.from),
+      Math.abs(g.y.from),
+      Math.abs(g.x.to - ref.cols),
+      Math.abs(g.y.to - ref.rows),
+    ),
+  };
+}
 
 const handlers = {
   quad({ image }) {
     return { quad: PH.reference.findPictureQuad(cv, image) };
   },
   reference({ image, quad, cols, rows, cache }) {
+    refQuad = quad;
     const prev = ref ?? cache;
     ref = PH.reference.buildReference(cv, image, quad, cols, rows, prev);
     // Places depend on the grid, so old analyses no longer fit.
@@ -52,6 +83,7 @@ const handlers = {
       board: !!s.board,
       border: s.board?.border ?? null,
       aspect: ref.hi.w / ref.hi.h,
+      seams: seamQuad(s.board?.seams),
     };
   },
   removeScene({ sceneId }) {
