@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Large puzzles (1000 pieces, overview photo of the whole puzzle on a mat):
+  feature points of the reference from up to 2400 px instead of 1200 (about
+  60 instead of 30 px per piece), more of them; with a finished part the
+  piece size comes from its places, blobs next to it of about one place are
+  loose pieces, and loose pieces are compared only with the gaps of the
+  reference (half the time, fewer rivals). A large finished part is no
+  longer rejected for an odd piece size or cut into fake pieces.
 - Puzzle mats: the background is the frequent and plain colour at the image
   border, not simply the most frequent one (a close-up with finished puzzle
   at the border lost all loose pieces); table noise only from border pixels

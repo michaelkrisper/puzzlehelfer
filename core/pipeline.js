@@ -88,18 +88,18 @@
     // A few occupied places are rather loose pieces lying together; as a
     // group they are still located, and the other blobs get split.
     if (board.filled.length < 8) return false;
-    const { W, H, C } = ref;
-    const [x0, y0] = PH.board.toScene(board, W / 2, H / 2);
-    const [x1, y1] = PH.board.toScene(board, W / 2 + C, H / 2);
-    const [x2, y2] = PH.board.toScene(board, W / 2, H / 2 + C);
-    const cell = Math.abs((x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0));
+    const cell = cellArea(board, ref);
     const d = seg.bigMask.data;
     let big = 0;
     for (let i = 0; i < d.length; i++) if (d[i]) big++;
     if (board.filled.length < 0.25 * (big / cell)) return false;
-    if (seg.pieces.length < 3) return true;
+    // A large finished part is clear by itself; its photo may have little
+    // else to measure the piece size on (crumbs, mat print).
+    if (seg.pieces.length < 3 || board.filled.length >= 40) return true;
+    // Loose pieces often lie in pairs or threes in an overview photo, so the
+    // typical blob may be several cells; clusters gave a scale 6–10 off.
     const k = seg.pieceArea / cell;
-    return k > 0.5 && k < 2;
+    return k > 0.35 && k < 4;
   }
 
   // Thickness of the finished part at each side of the picture, as a share
@@ -159,13 +159,12 @@
   // searched as a whole in the reference with feature points. Returns per
   // group outline, occupied places, anchor place, rotation and target in the
   // photo.
-  function locateGroups(cv, ref, sf, big, board) {
+  // Does an outline lie mostly on occupied places of the finished part?
+  function onBoardTest(board, ref) {
     const { C, cols, rows } = ref;
     const Hi = board && PH.geom.invertH(board.H);
-    // Blobs that the board maps onto occupied places are the board itself and
-    // need no (expensive) search of their own.
     const filled = new Set(board?.filled ?? []);
-    const onBoard = (out) => {
+    return (out) => {
       if (!Hi) return false;
       let n = 0;
       for (const [x, y] of out) {
@@ -176,6 +175,30 @@
       }
       return n > out.length * 0.5;
     };
+  }
+
+  // Places not occupied by the finished part (1 = free).
+  function freeCells(board, ref) {
+    const free = new Uint8Array(ref.cols * ref.rows).fill(1);
+    for (const c of board.filled) free[c] = 0;
+    return free;
+  }
+
+  // Area of one place in the photo, at the middle of the reference.
+  function cellArea(board, ref) {
+    const { W, H, C } = ref;
+    const [x0, y0] = PH.board.toScene(board, W / 2, H / 2);
+    const [x1, y1] = PH.board.toScene(board, W / 2 + C, H / 2);
+    const [x2, y2] = PH.board.toScene(board, W / 2, H / 2 + C);
+    return Math.abs((x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0));
+  }
+
+  function locateGroups(cv, ref, sf, big, board) {
+    const { C, cols, rows } = ref;
+    const Hi = board && PH.geom.invertH(board.H);
+    // Blobs that the board maps onto occupied places are the board itself and
+    // need no (expensive) search of their own.
+    const onBoard = onBoardTest(board, ref);
     const cand = big.map((b) => ({ b, out: simplify(b.contour, 3) })).filter((x) => !onBoard(x.out));
     if (!cand.length) return [];
     const loc = PH.feature.locatePieces(
@@ -262,18 +285,35 @@
       if (board && !plausibleBoard(board, ref, seg)) board = null;
       if (board) board.border = borderThickness(board, ref, seg.bigMask);
     }
-    const groups = sf ? locateGroups(cv, ref, sf, seg.big, board) : [];
+    // With a finished part the piece size is known from its places; the
+    // blob statistics may have been ruled by crumbs or mat print. Blobs off
+    // the finished part of about one place are loose pieces then.
+    let A = seg.pieceArea;
+    let segPieces = seg.pieces;
+    let segBig = seg.big;
+    if (board) {
+      A = cellArea(board, ref) * 1.05;
+      const onBoard = onBoardTest(board, ref);
+      segPieces = seg.pieces.filter((p) => p.area > 0.3 * A);
+      segBig = [];
+      for (const b of seg.big) {
+        if (b.area < 2.4 * A && !onBoard(simplify(b.contour, 3))) {
+          const touches = b.contour.some(([x, y]) => x <= 1 || y <= 1 || x >= w - 2 || y >= h - 2);
+          segPieces.push({ ...b, alt: null, touches });
+        } else segBig.push(b);
+      }
+    }
+    const groups = sf ? locateGroups(cv, ref, sf, segBig, board) : [];
     const pieces = [];
     const unclear = [];
     // Without a finished part, large areas that are no assembled group are
     // pieces lying against each other: split at their narrow contacts. The
     // parts get a mask of their own, the shared one holds the neighbours.
-    const A = seg.pieceArea;
     const quality = (c) => PH.piece.analyzeContour(c, bodyPrior(board, ref, c, A))?.quality ?? 0;
     const loose = [];
     // Two pieces touching are still below the size of a large area: split
     // too large outlines if every part has a better piece shape.
-    for (const p of seg.pieces) {
+    for (const p of segPieces) {
       const parts = !p.touches && p.area > 1.3 * A ? PH.segment.splitBlob(cv, p.contour, A) : null;
       if (parts?.length > 1 && parts.every((q) => q.area > 0.4 * A)) {
         const whole = Math.max(quality(p.contour), p.alt ? quality(p.alt) : 0);
@@ -285,21 +325,23 @@
       }
       loose.push(p);
     }
-    if (!board)
-      for (const b of seg.big) {
-        if (groups.some((g) => g.big === b)) continue;
-        const parts = PH.segment.splitBlob(cv, b.contour, A) ?? [b];
-        for (const q of parts) {
-          if (q.area > 0.4 * A && q.area < 2.2 * A) {
-            const touches = q.contour.some(([x, y]) => x <= 1 || y <= 1 || x >= w - 2 || y >= h - 2);
-            loose.push({ contour: q.contour, area: q.area, touches, alt: null, own: true });
-          } else unclear.push({ outline: simplify(q.contour, 3), area: q.area, reason: 'merged' });
-        }
+    const onBoard = onBoardTest(board, ref);
+    for (const b of segBig) {
+      if (groups.some((g) => g.big === b) || onBoard(simplify(b.contour, 3))) continue;
+      // A huge area is a finished part that could not be placed, not a
+      // cluster of loose pieces: splitting it gives only fake pieces.
+      const parts = b.area < 25 * A ? (PH.segment.splitBlob(cv, b.contour, A) ?? [b]) : [b];
+      for (const q of parts) {
+        if (q.area > 0.4 * A && q.area < 2.2 * A) {
+          const touches = q.contour.some(([x, y]) => x <= 1 || y <= 1 || x >= w - 2 || y >= h - 2);
+          loose.push({ contour: q.contour, area: q.area, touches, alt: null, own: true });
+        } else unclear.push({ outline: simplify(q.contour, 3), area: q.area, reason: 'merged' });
       }
+    }
     let own = null;
     progress('Teile werden vermessen …');
     for (const p of loose) {
-      const prior = p.touches ? null : bodyPrior(board, ref, p.contour, seg.pieceArea);
+      const prior = p.touches ? null : bodyPrior(board, ref, p.contour, A);
       let shape = p.touches ? null : PH.piece.analyzeContour(p.contour, prior);
       let contour = p.contour;
       if (!p.touches && p.alt) {
@@ -333,6 +375,7 @@
         sf,
         pieces.map((p) => p.outline),
         pieces.map((p) => p.shape),
+        board ? freeCells(board, ref) : null,
       );
       pieces.forEach((p, i) => {
         p.feat = loc[i];
@@ -345,7 +388,7 @@
     src.delete();
     seg.mask.delete();
     seg.bigMask.delete();
-    return { width: w, height: h, scale, pieces, unclear, groups, board, pieceArea: seg.pieceArea };
+    return { width: w, height: h, scale, pieces, unclear, groups, board, pieceArea: A };
   }
 
   // Colour fit without a finished puzzle: the loose pieces are a sample of the

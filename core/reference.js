@@ -253,7 +253,9 @@
     const qw = (len(quad[0], quad[1]) + len(quad[3], quad[2])) / 2;
     const qh = (len(quad[0], quad[3]) + len(quad[1], quad[2])) / 2;
     const cellAspect = qw / cols / (qh / rows);
-    const hw = Math.round(Math.min(1200, qw));
+    // Up to 2400 px: with 1000 pieces and more, 1200 px leave about 30 px
+    // per piece, too little for feature points to recognise a piece.
+    const hw = Math.round(Math.min(2400, qw));
     const hh = Math.round((hw * qh) / qw);
     const hr = rectify(cv, img, quad, hw, hh);
     const gray = new Uint8Array(hw * hh);

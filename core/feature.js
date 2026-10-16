@@ -10,7 +10,8 @@
   const DETECTORS = [
     {
       name: 'SIFT',
-      make: (cv, forRef) => new cv.SIFT(forRef ? 8000 : 0, 3, 0.02),
+      make: (cv, forRef, area = 0) =>
+        new cv.SIFT(forRef ? Math.max(8000, Math.round(area / 120)) : 0, 3, 0.02),
       norm: (cv) => cv.NORM_L2,
     },
     {
@@ -25,7 +26,8 @@
     const out = [];
     for (const d of DETECTORS) {
       if (typeof cv[d.name] !== 'function' || (only && !only.includes(d.name))) continue;
-      const det = cap && d.name === 'SIFT' ? new cv.SIFT(cap, 3, 0.02) : d.make(cv, forRef);
+      const det =
+        cap && d.name === 'SIFT' ? new cv.SIFT(cap, 3, 0.02) : d.make(cv, forRef, gray.rows * gray.cols);
       const kp = new cv.KeyPointVector();
       const desc = new cv.Mat();
       const m = mask ?? new cv.Mat();
@@ -222,12 +224,13 @@
 
   // Nearest reference point for the points idx of set s (ratio test), stored
   // in s.best: index in the reference or -1.
-  function matchPoints(cv, ref, s, idx) {
-    const r = ref.feat?.find((f) => f.name === s.name);
-    const todo = idx.filter((i) => s.best[i] === -2);
+  // r0, best: another reference set (e.g. only the gaps) and its own result.
+  function matchPoints(cv, ref, s, idx, r0 = null, best = s.best, loose = 0.8) {
+    const r = r0 ?? ref.feat?.find((f) => f.name === s.name);
+    const todo = idx.filter((i) => best[i] === -2);
     if (!todo.length) return;
     if (!r?.rows) {
-      for (const i of todo) s.best[i] = -1;
+      for (const i of todo) best[i] = -1;
       return;
     }
     const hamming = s.norm === cv.NORM_HAMMING;
@@ -254,10 +257,10 @@
       }
       res ??= PH.knn.knn2(...args);
       // Ratio test 0.8 on the distance, for L2 on its square.
-      const ratio = hamming ? 0.8 : 0.64;
+      const ratio = hamming ? loose : loose * loose;
       todo.forEach((i, k) => {
         const d2 = res[k * 3 + 2];
-        s.best[i] = d2 !== 0xffffffff && res[k * 3 + 1] < ratio * d2 ? res[k * 3] : -1;
+        best[i] = d2 !== 0xffffffff && res[k * 3 + 1] < ratio * d2 ? res[k * 3] : -1;
       });
       return;
     }
@@ -273,12 +276,12 @@
     const bf = new cv.BFMatcher(s.norm, false);
     const mm = new cv.DMatchVectorVector();
     bf.knnMatch(q, rd, mm, 2);
-    for (const i of todo) s.best[i] = -1;
+    for (const i of todo) best[i] = -1;
     for (let k = 0; k < mm.size(); k++) {
       const pr = mm.get(k);
       if (pr.size() < 2) continue;
       const m0 = pr.get(0);
-      if (m0.distance < 0.8 * pr.get(1).distance) s.best[todo[m0.queryIdx]] = m0.trainIdx;
+      if (m0.distance < 0.8 * pr.get(1).distance) best[todo[m0.queryIdx]] = m0.trainIdx;
     }
     for (const m of [q, rd, bf, mm]) m.delete();
   }
@@ -288,7 +291,33 @@
   // {cell, rot, inliers, angle, at, toRef}. shapes[i]: corners and angle of
   // the piece, or null (then no grid rotation, only place and angle).
   // sf: sceneFeatures of the photo.
-  function locatePieces(cv, ref, sf, contours, shapes) {
+  // Reference points in free places (and up to 0.35 places beyond, for the
+  // knobs): with a finished part the loose pieces belong into its gaps, and
+  // repeated motif elsewhere no longer spoils the ratio test.
+  function gapSubset(ref, r, free) {
+    const { hi, W, H, C, cols, rows } = ref;
+    const ok = (u, v) => {
+      const c = Math.floor(u);
+      const w = Math.floor(v);
+      return c >= 0 && w >= 0 && c < cols && w < rows && free[w * cols + c];
+    };
+    const keep = [];
+    for (let j = 0; j < r.rows; j++) {
+      const u = (r.pts[j * 2] * W) / hi.w / C;
+      const v = (r.pts[j * 2 + 1] * H) / hi.h / C;
+      if (ok(u, v) || ok(u + 0.35, v) || ok(u - 0.35, v) || ok(u, v + 0.35) || ok(u, v - 0.35)) keep.push(j);
+    }
+    const data = new r.data.constructor(keep.length * r.cols);
+    const pts = new Float32Array(keep.length * 2);
+    keep.forEach((j, k) => {
+      data.set(r.data.subarray(j * r.cols, (j + 1) * r.cols), k * r.cols);
+      pts[k * 2] = r.pts[j * 2];
+      pts[k * 2 + 1] = r.pts[j * 2 + 1];
+    });
+    return { name: r.name, norm: r.norm, rows: keep.length, cols: r.cols, type: r.type, data, pts };
+  }
+
+  function locatePieces(cv, ref, sf, contours, shapes, free = null) {
     if (!ref.feat?.length) return contours.map(() => null);
     const bbox = contours.map((c) => {
       let x0 = Infinity;
@@ -306,7 +335,8 @@
     // Point pairs per piece, collected over both detectors.
     const pairs = contours.map(() => ({ a: [], b: [] }));
     for (const s of sf.sets) {
-      const r = ref.feat.find((f) => f.name === s.name);
+      const full = ref.feat.find((f) => f.name === s.name);
+      const r = full && free ? gapSubset(ref, full, free) : full;
       const n = s.pts.length / 2;
       if (!r?.rows || !n) continue;
       const owner = new Int32Array(n).fill(-1);
@@ -324,9 +354,12 @@
           }
         }
       }
-      matchPoints(cv, ref, s, idx);
+      const best = free ? new Int32Array(n).fill(-2) : s.best;
+      // In the gaps the ratio test may be looser: fewer rivals, and RANSAC
+      // sorts out the rest (Great Wave overview: 7 -> 60 pairs per piece).
+      matchPoints(cv, ref, s, idx, r, best, free ? 0.9 : 0.8);
       for (const i of idx) {
-        const j = s.best[i];
+        const j = best[i];
         if (j < 0) continue;
         pairs[owner[i]].a.push([s.pts[i * 2], s.pts[i * 2 + 1]]);
         pairs[owner[i]].b.push([r.pts[j * 2], r.pts[j * 2 + 1]]);
