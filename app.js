@@ -5,7 +5,7 @@ const REF_MAX = 2400;
 const SCENE_MAX = 4000;
 const COUNTS = [100, 200, 300, 500, 1000, 1500, 2000];
 // Same as VERSION in sw.js; bump both together.
-const APP_VERSION = 'v27';
+const APP_VERSION = 'v28';
 const ARROWS = 6;
 const $ = (id) => document.getElementById(id);
 
@@ -139,7 +139,9 @@ const state = {
   result: null,
   allArrows: false,
   edgeOnly: false,
-  placed: [], // pieces put in by the user: {sceneId, index, cell, rot}
+  // Pieces marked by the user, in order (for undo): {kind: 'placed' with
+  // cell, rot | 'removed' (no piece, or a wrong find), sceneId, index}.
+  marks: [],
   selected: null,
 };
 
@@ -428,7 +430,7 @@ async function applyReference() {
   setStatus('');
   // New grid: re-analyse existing photos (piece numbers change, so pieces
   // marked as put in are forgotten).
-  state.placed = [];
+  state.marks = [];
   for (const s of state.scenes) s.busy = true;
   renderThumbs();
   for (const s of state.scenes) await analyze(s, false);
@@ -637,7 +639,7 @@ async function removeScene(id) {
   const s = state.scenes.find((x) => x.id === id);
   URL.revokeObjectURL(s.url);
   state.scenes = state.scenes.filter((x) => x.id !== id);
-  state.placed = state.placed.filter((p) => p.sceneId !== id);
+  state.marks = state.marks.filter((p) => p.sceneId !== id);
   await call('removeScene', { sceneId: id });
   if (state.current === id) state.current = state.scenes.at(-1)?.id ?? null;
   renderThumbs();
@@ -674,17 +676,26 @@ $('detail-placed').addEventListener('click', async () => {
   const x = state.selected;
   $('detail').close();
   if (!x || x.cell === null) return;
-  state.placed.push({ sceneId: x.sceneId, index: x.index, cell: x.cell, rot: x.rot });
+  state.marks.push({ kind: 'placed', sceneId: x.sceneId, index: x.index, cell: x.cell, rot: x.rot });
+  state.selected = null;
+  await solve();
+});
+// Remove: not a piece, or a piece the app got wrong; it takes no place.
+$('detail-removed').addEventListener('click', async () => {
+  const x = state.selected;
+  $('detail').close();
+  if (!x) return;
+  state.marks.push({ kind: 'removed', sceneId: x.sceneId, index: x.index });
   state.selected = null;
   await solve();
 });
 $('undo-placed').addEventListener('click', async () => {
-  state.placed.pop();
+  state.marks.pop();
   await solve();
 });
 
 $('new-round').addEventListener('click', async () => {
-  state.placed = [];
+  state.marks = [];
   for (const s of state.scenes) URL.revokeObjectURL(s.url);
   state.scenes = [];
   state.current = null;
@@ -701,10 +712,13 @@ function setStatus(t) {
 
 async function solve() {
   setStatus('Plätze werden gesucht …');
-  const r = await call('solve', { placed: state.placed });
+  const r = await call('solve', {
+    placed: state.marks.filter((m) => m.kind === 'placed'),
+    removed: state.marks.filter((m) => m.kind === 'removed'),
+  });
   // Pieces put in are hidden; the next arrows move up.
   r.suggestions = r.suggestions.filter((s) => !s.placed);
-  $('undo-placed').hidden = !state.placed.length;
+  $('undo-placed').hidden = !state.marks.length;
   // Order: sure pieces in the order they are resolved,
   // then the rest by confidence.
   const order = r.suggestions
@@ -1013,7 +1027,7 @@ function drawMap() {
   g.drawImage(view, 0, 0, W * k, H * k);
   const filled = new Set([
     ...state.result.scenes.flatMap((s) => s.board?.filled ?? []),
-    ...state.placed.map((p) => p.cell),
+    ...state.marks.filter((m) => m.kind === 'placed').map((m) => m.cell),
   ]);
   if (filled.size) {
     g.fillStyle = '#000a';

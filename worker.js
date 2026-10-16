@@ -94,11 +94,16 @@ const handlers = {
     scenes.clear();
     return {};
   },
-  solve({ id, placed = [] }) {
+  solve({ id, placed = [], removed = [] }) {
     const ids = [...scenes.keys()];
     const list = ids.map((k) => scenes.get(k));
-    const fixed = placed.map((p) => ({ ...p, scene: ids.indexOf(p.sceneId) })).filter((p) => p.scene >= 0);
-    const sugg = PH.pipeline.solve(ref, list, { progress: progressFor(id), placed: fixed });
+    const local = (arr) =>
+      arr.map((p) => ({ ...p, scene: ids.indexOf(p.sceneId) })).filter((p) => p.scene >= 0);
+    const sugg = PH.pipeline.solve(ref, list, {
+      progress: progressFor(id),
+      placed: local(placed),
+      removed: local(removed),
+    });
     return {
       suggestions: sugg.map((s) => ({ ...s, sceneId: ids[s.scene] })),
       scenes: ids.map((sid, i) => {

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- "Entfernen" in the piece details: a wrong find (no piece, or a piece
+  the app got wrong) is left out and takes no place; "Rückgängig" undoes
+  the last "Eingesetzt" or "Entfernen".
 - Version number in the header (the code running now); when a newer one has
   been installed in the background, "neu laden" appears next to it.
 - "Eingesetzt" in the piece details: the piece is hidden, its place counts

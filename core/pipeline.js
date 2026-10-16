@@ -578,6 +578,8 @@
     // Pieces the user has put in (opts.placed: scene, index, cell, rot): their
     // places are taken, and their sides are gap sides for the neighbours.
     const placed = new Map((opts.placed ?? []).map((p) => [`${p.scene}:${p.index}`, p]));
+    // Removed by the user (no piece, or a wrong find): left out entirely.
+    const removed = new Set((opts.removed ?? []).map((p) => `${p.scene}:${p.index}`));
     holes = [...holes];
     for (const p of placed.values()) {
       const piece = scenes[p.scene]?.pieces[p.index];
@@ -616,7 +618,7 @@
     const items = [];
     scenes.forEach((s, si) => {
       s.pieces.forEach((p, pi) => {
-        if (placed.has(`${si}:${pi}`)) return;
+        if (placed.has(`${si}:${pi}`) || removed.has(`${si}:${pi}`)) return;
         items.push({
           scene: si,
           index: pi,
