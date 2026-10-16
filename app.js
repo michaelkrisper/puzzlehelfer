@@ -4,6 +4,8 @@ const { gridFor, gridFromBorder, borderCost, applyH } = PH.geom;
 const REF_MAX = 2400;
 const SCENE_MAX = 4000;
 const COUNTS = [100, 200, 300, 500, 1000, 1500, 2000];
+// Same as VERSION in sw.js; bump both together.
+const APP_VERSION = 'v27';
 const ARROWS = 6;
 const $ = (id) => document.getElementById(id);
 
@@ -1366,6 +1368,17 @@ zoomable($('map'));
   }
 })();
 
+// Version of the code running now; a newer one installed in the background
+// takes effect after reloading.
+$('version').textContent = APP_VERSION;
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) return;
+    const v = $('version');
+    v.textContent = `${APP_VERSION} · neu laden`;
+    v.classList.add('update');
+    v.onclick = () => location.reload();
+  });
   navigator.serviceWorker.register('sw.js');
 }

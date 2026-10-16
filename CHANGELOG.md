@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Version number in the header (the code running now); when a newer one has
+  been installed in the background, "neu laden" appears next to it.
 - "Eingesetzt" in the piece details: the piece is hidden, its place counts
   as taken, its knobs and holes become gap sides for the neighbouring
   places, and the next arrow moves up. "Rückgängig" takes the last one back.
