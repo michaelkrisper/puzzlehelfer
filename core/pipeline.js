@@ -159,19 +159,26 @@
   // searched as a whole in the reference with feature points. Returns per
   // group outline, occupied places, anchor place, rotation and target in the
   // photo.
-  // Does an outline lie mostly on occupied places of the finished part?
+  // Does an outline lie mostly on occupied places of the finished part? The
+  // outline of the finished part itself runs along place borders (a point
+  // counts if a place next to it is occupied) and, where the photo cuts it
+  // off, over places the photo does not show.
   function onBoardTest(board, ref) {
     const { C, cols, rows } = ref;
     const Hi = board && PH.geom.invertH(board.H);
-    const filled = new Set(board?.filled ?? []);
+    const filled = new Set([...(board?.filled ?? []), ...(board?.unseen ?? [])]);
+    const at = (u, v) => {
+      const c = Math.floor(u / C);
+      const r = Math.floor(v / C);
+      return c >= 0 && r >= 0 && c < cols && r < rows && filled.has(r * cols + c);
+    };
+    const e = 0.25 * C;
     return (out) => {
       if (!Hi) return false;
       let n = 0;
       for (const [x, y] of out) {
         const [u, v] = PH.geom.applyH(Hi, x, y);
-        const c = Math.floor(u / C);
-        const r = Math.floor(v / C);
-        if (c >= 0 && r >= 0 && c < cols && r < rows && filled.has(r * cols + c)) n++;
+        if (at(u - e, v - e) || at(u + e, v - e) || at(u - e, v + e) || at(u + e, v + e)) n++;
       }
       return n > out.length * 0.5;
     };
@@ -347,12 +354,32 @@
     }
     let own = null;
     progress('Teile werden vermessen …');
+    const measure = (contour, prior) => {
+      if (!board) return PH.piece.analyzeContour(contour, prior);
+      // In the plane seen from above; corners back into the photo.
+      const k = board.k * ref.C;
+      const s = PH.piece.analyzeContour(
+        contour.map(([x, y]) => PH.board.toPlane(board, x, y)),
+        [k, k],
+      );
+      if (!s) return null;
+      const corners = s.corners.map(([u, v]) => PH.board.fromPlane(board, u, v));
+      const d = (i) =>
+        Math.hypot(corners[(i + 1) % 4][0] - corners[i][0], corners[(i + 1) % 4][1] - corners[i][1]);
+      return {
+        ...s,
+        corners,
+        center: [0, 1].map((a) => corners.reduce((t, q) => t + q[a], 0) / 4),
+        angle: (Math.atan2(corners[1][1] - corners[0][1], corners[1][0] - corners[0][0]) * 180) / Math.PI,
+        side: (d(0) + d(1) + d(2) + d(3)) / 4,
+      };
+    };
     for (const p of loose) {
       const prior = p.touches ? null : bodyPrior(board, ref, p.contour, A);
-      let shape = p.touches ? null : PH.piece.analyzeContour(p.contour, prior);
+      let shape = p.touches ? null : measure(p.contour, prior);
       let contour = p.contour;
       if (!p.touches && p.alt) {
-        const s2 = PH.piece.analyzeContour(p.alt, prior);
+        const s2 = measure(p.alt, prior);
         if (s2 && (!shape || s2.quality > shape.quality)) {
           shape = s2;
           contour = p.alt;
@@ -489,9 +516,12 @@
       it.prep.allowRot = allowedRots(it.shape, ref);
       it.prep.strictBorder = !it.split && clearSides(it.shape);
       const must = it.feat && it.feat.rot !== null ? [it.feat] : [];
-      it.cands = PH.match.candidates(it.prep, it.sides, ref, ctx.free, must);
+      // Plain-coloured pieces: the colour alone puts the right place far
+      // down, so only places where knobs and holes fit are compared.
+      const fits = ctx.gaps ? (cell, rot) => !gapFit(it.sides, { cell, rot }, ctx.gaps).bad : null;
+      it.cands = PH.match.candidates(it.prep, it.sides, ref, ctx.free, must, fits);
     }
-    return PH.match.assign(items, ref, { filled: ctx.filled, holes: ctx.holes });
+    return PH.match.assign(items, ref, { filled: ctx.filled, holes: ctx.holes, unknown: ctx.unknown });
   }
 
   // The same piece in two photos (e.g. overview and close-up): all four side
@@ -559,15 +589,25 @@
     const N = ref.cols * ref.rows;
     const free = new Uint8Array(N).fill(1);
     const filled = new Set();
-    let holes = [];
+    // Gap sides from every photo with the finished part, with outline first.
+    const gapOf = new Map();
+    // A place counts as free only if some photo shows it (photos of part of
+    // the puzzle).
+    const seen = new Uint8Array(N);
+    let boards = 0;
     for (const s of scenes) {
       if (!s.board) continue;
+      boards++;
       for (const f of s.board.filled) {
         free[f] = 0;
         filled.add(f);
       }
-      holes = s.board.holes;
+      const unseen = new Set(s.board.unseen ?? []);
+      for (let c = 0; c < N; c++) if (!unseen.has(c)) seen[c] = 1;
+      for (const [key, g] of s.board.holes) if (!gapOf.get(key)?.hole) gapOf.set(key, g);
     }
+    if (boards) for (let c = 0; c < N; c++) if (!seen[c]) free[c] = 0;
+    let holes = [...gapOf];
     // Places of joined groups are taken for loose pieces.
     for (const s of scenes)
       for (const g of s.groups ?? [])
@@ -634,7 +674,14 @@
     const active = items.filter((_, i) => !dup.has(i));
     const stats = statsColor(active, ref);
     const colors = scenes.map((s) => s.board?.color ?? stats);
-    const ctx = { free, filled: [...filled], holes };
+    const ctx = {
+      free,
+      filled: [...filled],
+      holes,
+      gaps: atEdge ? gaps : null,
+      // Places not filled and not next to the finished part (or not in the photo).
+      unknown: atEdge ? N - filled.size - free.reduce((a, b) => a + b, 0) : 0,
+    };
     let result = runAssign(active, ref, colors, ctx, progress);
     if (opts.refine !== false) {
       const col = refitColor(active, ref, result);
@@ -725,16 +772,83 @@
     const col = cand.cell % cols;
     let psi = 0;
     let target = null;
+    let quad = null;
     if (scene.board) {
       const cx = (col + 0.5) * C;
       const cy = (row + 0.5) * C;
       target = PH.board.toScene(scene.board, cx, cy);
+      quad = [
+        [col, row],
+        [col + 1, row],
+        [col + 1, row + 1],
+        [col, row + 1],
+      ].map(([x, y]) => PH.board.toScene(scene.board, x * C, y * C));
       const t2 = PH.board.toScene(scene.board, cx + C, cy);
       psi = (Math.atan2(t2[1] - target[1], t2[0] - target[0]) * 180) / Math.PI;
     }
     const turn = PH.geom.wrapDeg(-it.shape.angle + cand.rot * 90 + psi);
-    return { cell: cand.cell, row, col, rot: cand.rot, turn, target, e: cand.e };
+    return { cell: cand.cell, row, col, rot: cand.rot, turn, target, quad, e: cand.e };
   }
 
-  PH.pipeline = { analyzeScene, solve, findDuplicates };
+  // The photo seen straight from above, the puzzle upright as in the
+  // reference (a photo of part of the puzzle from the side). image: the photo
+  // at the size given to analyzeScene. M: working-image pixel → view pixel.
+  function straightView(cv, image, scene, ref) {
+    const { board, width: w, height: h, scale } = scene;
+    const toView = (x, y) => PH.board.toPlane(board, x, y);
+    const pts = [];
+    for (let i = 0; i <= 8; i++)
+      for (const [x, y] of [
+        [(w * i) / 8, 0],
+        [(w * i) / 8, h],
+        [0, (h * i) / 8],
+        [w, (h * i) / 8],
+      ])
+        pts.push(toView(x, y));
+    // Far off in an oblique photo the table stretches without end: at most
+    // half a puzzle around it.
+    const rw = board.k * ref.W;
+    const rh = board.k * ref.H;
+    const x0 = Math.max(-0.5 * rw, Math.min(...pts.map((p) => p[0])));
+    const x1 = Math.min(1.5 * rw, Math.max(...pts.map((p) => p[0])));
+    const y0 = Math.max(-0.5 * rh, Math.min(...pts.map((p) => p[1])));
+    const y1 = Math.min(1.5 * rh, Math.max(...pts.map((p) => p[1])));
+    // About as many pixels as the photo.
+    const f = Math.min(1 / scale, Math.sqrt((image.width * image.height) / ((x1 - x0) * (y1 - y0))));
+    const W = Math.round((x1 - x0) * f);
+    const H = Math.round((y1 - y0) * f);
+    const k = board.k * f;
+    const Hi = board.Hi;
+    // Working pixel → plane → view.
+    const M = [
+      k * Hi[0] - f * x0 * Hi[6],
+      k * Hi[1] - f * x0 * Hi[7],
+      k * Hi[2] - f * x0 * Hi[8],
+      k * Hi[3] - f * y0 * Hi[6],
+      k * Hi[4] - f * y0 * Hi[7],
+      k * Hi[5] - f * y0 * Hi[8],
+      Hi[6],
+      Hi[7],
+      Hi[8],
+    ];
+    // The photo is larger than the working image by 1 / scale.
+    const Mf = M.map((v, i) => (i % 3 < 2 ? v * scale : v));
+    const src = cv.matFromImageData(image);
+    const dst = new cv.Mat();
+    const m = cv.matFromArray(3, 3, cv.CV_64F, Mf);
+    cv.warpPerspective(
+      src,
+      dst,
+      m,
+      new cv.Size(W, H),
+      cv.INTER_LINEAR,
+      cv.BORDER_CONSTANT,
+      new cv.Scalar(0, 0, 0, 255),
+    );
+    const rgba = new Uint8ClampedArray(dst.data);
+    for (const x of [src, dst, m]) x.delete();
+    return { rgba, w: W, h: H, M };
+  }
+
+  PH.pipeline = { analyzeScene, solve, findDuplicates, straightView };
 })();

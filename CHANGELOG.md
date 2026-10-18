@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Pieces are numbered by probability (1 = likeliest) instead of green,
+  yellow and red; the step card and the piece list show the percentage,
+  grey means no place.
+- Plain-coloured pieces at the end (Great Wave sky): the grid of the
+  finished part follows its seams and outline, not only the feature points,
+  which leave plain areas to a smooth fit (it missed the pieces there by up
+  to half a place, so finished places at the gap counted as free and gap
+  sides sat in the wrong place). At the edge of the finished part only
+  places and rotations whose knobs and holes fit the gap are compared; the
+  colour orders them. A piece may also belong further inside the gap, so a
+  plain piece is no longer "sure" just because its rivals are taken.
+  Sky photo: 87 instead of 20 pieces with a place.
+- Pieces and gaps are measured on the table seen from above: an oblique
+  photo squashed far pieces by up to a fifth, more than knob shapes differ.
+- Photos of part of the puzzle: places the photo does not show are not
+  suggested; gap sides come from every photo with the finished part.
+  "Von oben (begradigt)" shows the photo straight from above, the puzzle
+  upright as in the reference, with arrows and numbers.
+- The finished part cut off by the photo edge is no longer reported as an
+  unclear blob.
+
 - Step by step: a card shows one piece at a time, the surest first, turned
   as it goes in, with its candidate places from the reference; the photo
   shows only this piece, the arrow to the chosen place and the turn.

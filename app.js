@@ -1,11 +1,11 @@
 // UI: capture and crop the reference, add pieces photos,
 // draw suggestions with arrows and rotation.
-const { gridFor, gridFromBorder, borderCost, applyH } = PH.geom;
+const { gridFor, gridFromBorder, borderCost, applyH, invertH } = PH.geom;
 const REF_MAX = 2400;
 const SCENE_MAX = 4000;
 const COUNTS = [100, 200, 300, 500, 1000, 1500, 2000];
 // Same as VERSION in sw.js; bump both together.
-const APP_VERSION = 'v29';
+const APP_VERSION = 'v30';
 const ARROWS = 6;
 const $ = (id) => document.getElementById(id);
 
@@ -134,11 +134,12 @@ const state = {
   gridManual: false, // columns/rows set with −/+
   gridAuto: false, // grid already taken from a photo
   gridNote: '',
-  scenes: [], // {id, canvas, image, url, busy}
+  scenes: [], // {id, canvas, image, url, busy, straight}
   current: null,
   result: null,
   allArrows: false,
   edgeOnly: false,
+  straight: false, // photo seen from above (needs the puzzle in the photo)
   // Pieces marked by the user, in order (for undo): {kind: 'placed' with
   // cell, rot | 'removed' (no piece, or a wrong find), sceneId, index}.
   marks: [],
@@ -548,6 +549,7 @@ async function addScene(file) {
 
 async function analyze(s, thenSolve) {
   setStatus('Teile werden gesucht …');
+  s.straight = null;
   let r = null;
   try {
     r = await call('scene', { sceneId: s.id, image: s.image });
@@ -712,6 +714,31 @@ $('new-round').addEventListener('click', async () => {
   setStatus('Setze die vorgeschlagenen Teile ein und fotografiere Puzzle und restliche Teile erneut.');
 });
 
+// Photo of part of the puzzle, taken from the side: show it from above, the
+// puzzle upright as in the reference.
+$('straight').addEventListener('click', async () => {
+  const cur = currentScene();
+  if (!cur) return;
+  state.straight = !state.straight;
+  if (state.straight && !cur.s.straight) {
+    setStatus('Foto wird begradigt …');
+    try {
+      const r = await call('straighten', { sceneId: cur.s.id, image: cur.s.image });
+      const c = document.createElement('canvas');
+      c.width = r.w;
+      c.height = r.h;
+      c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(r.rgba), r.w, r.h), 0, 0);
+      cur.s.straight = { canvas: c, width: r.w, height: r.h, M: r.M, Mi: invertH(r.M) };
+      setStatus('');
+    } catch (err) {
+      state.straight = false;
+      setStatus(`Begradigen ging nicht: ${err.message}`);
+    }
+  }
+  view.scene = null;
+  renderResult();
+});
+
 function setStatus(t) {
   $('status').textContent = t;
 }
@@ -725,14 +752,11 @@ async function solve() {
   // Pieces put in are hidden; the next arrows move up.
   r.suggestions = r.suggestions.filter((s) => !s.placed);
   $('undo-placed').hidden = !state.marks.length;
-  // Order: sure pieces in the order they are resolved,
-  // then the rest by confidence.
-  const order = r.suggestions
-    .filter((s) => s.cell !== null && !s.sameAs)
-    .sort((a, b) => (a.step ?? 1e9) - (b.step ?? 1e9) || b.conf - a.conf);
+  // Numbered by probability: 1 is the likeliest.
+  const order = r.suggestions.filter((s) => s.cell !== null && !s.sameAs).sort((a, b) => b.conf - a.conf);
   order.forEach((s, i) => {
     s.label = i + 1;
-    s.level = s.sure ? 'ok' : s.conf >= 0.2 ? 'maybe' : 'bad';
+    s.level = 'ok';
   });
   // The same piece on a second photo gets the same number.
   const sceneIds = r.scenes.map((x) => x.id);
@@ -762,11 +786,9 @@ async function solve() {
     });
   }
   state.result = r;
-  const sure = order.filter((s) => s.level === 'ok').length;
-  const maybe = order.filter((s) => s.level === 'maybe').length;
   const unclear = r.scenes.reduce((a, s) => a + s.unclear.length, 0);
   const total = r.suggestions.filter((s) => !s.sameAs).length;
-  let msg = `${state.gridNote ? `${state.gridNote} ` : ''}${total} Teile erkannt: ${sure} sicher, ${maybe} vermutlich zugeordnet.`;
+  let msg = `${state.gridNote ? `${state.gridNote} ` : ''}${total} Teile erkannt, ${order.length} mit Platz, nummeriert nach Wahrscheinlichkeit.`;
   const groups = r.scenes.reduce((a, s) => a + (s.groups?.length ?? 0), 0);
   if (groups) msg += ` ${groups} zusammengesteckte ${groups === 1 ? 'Gruppe' : 'Gruppen'} zugeordnet.`;
   if (unclear) msg += ` ${unclear} Flecken unklar (berühren sich Teile?).`;
@@ -845,7 +867,7 @@ function renderSteps() {
     const n = q.indexOf(x) + 1;
     $('step-title').textContent = `Teil ${x.label}`;
     $('step-sub').textContent =
-      `${n} von ${q.length}${state.skipped.has(keyOf(x)) ? ' · übersprungen' : ''}${x.level === 'ok' ? ' · sicher' : ''}`;
+      `${n} von ${q.length}${state.skipped.has(keyOf(x)) ? ' · übersprungen' : ''} · ${Math.round(x.conf * 100)} %`;
     drawPieceTile($('step-piece'), x, c.rot);
     const box = $('step-cands');
     box.replaceChildren();
@@ -882,6 +904,7 @@ function renderPieceList(q, cur) {
     const no = document.createElement('span');
     no.className = 'no';
     no.textContent = x.label;
+    no.title = `${Math.round(x.conf * 100)} %`;
     no.style.color = COLORS[x.level];
     const pc = document.createElement('canvas');
     pc.width = pc.height = 104;
@@ -928,7 +951,8 @@ $('step-removed').addEventListener('click', async () => {
 });
 
 // ---------- Draw result ----------
-const COLORS = { ok: '#3ddc84', maybe: '#ffc94d', bad: '#ff6b6b' };
+// ok: has a place (numbered by probability), bad: no place.
+const COLORS = { ok: '#f5f5f5', bad: '#7d8996' };
 
 const view = {
   s: 1,
@@ -947,12 +971,25 @@ function currentScene() {
   return s && info ? { s, info } : null;
 }
 
+// What the viewer shows: the photo, or the photo from above with M mapping
+// recognition coordinates (working image) into it.
+function viewImage(cur) {
+  const st = state.straight && cur.info.board ? cur.s.straight : null;
+  return st ?? { canvas: cur.s.canvas, width: cur.info.width, height: cur.info.height, M: null, Mi: null };
+}
+
+// Straightened view: recognition coordinates → view (null: the photo itself).
+let viewH = null;
+const vp = (p) => (viewH ? applyH(viewH, p[0], p[1]) : p);
+
 function renderResult() {
   const cur = currentScene();
   if (!cur) return;
   const cv = $('viewer');
+  $('straight').hidden = !cur.info.board;
+  $('straight').textContent = state.straight ? 'Foto wie aufgenommen' : 'Von oben (begradigt)';
   // Recognition coordinates refer to the possibly downscaled working image.
-  const { width: w, height: h } = cur.info;
+  const { width: w, height: h } = viewImage(cur);
   view.cssW = cv.parentElement.clientWidth;
   view.cssH = Math.min(window.innerHeight * 0.7, (view.cssW * h) / w);
   if (view.scene !== cur.s.id) {
@@ -976,7 +1013,18 @@ function drawViewer() {
   g.save();
   g.translate(view.tx, view.ty);
   g.scale(view.s, view.s);
-  g.drawImage(cur.s.canvas, 0, 0, cur.info.width, cur.info.height);
+  const im = viewImage(cur);
+  g.drawImage(im.canvas, 0, 0, im.width, im.height);
+  viewH = im.M;
+  try {
+    drawOverlay(g, cur);
+  } finally {
+    viewH = null;
+    g.restore();
+  }
+}
+
+function drawOverlay(g, cur) {
   const px = 1 / view.s; // one screen unit in image pixels
   const sugg = state.result.suggestions.filter(
     (x) => x.sceneId === cur.s.id && (!state.edgeOnly || onEdge(x)),
@@ -995,7 +1043,6 @@ function drawViewer() {
   const f = !state.allArrows && focused();
   if (f && f.sceneId === cur.s.id) {
     drawFocus(g, cur.info, f, px);
-    g.restore();
     return;
   }
   for (const x of sugg) {
@@ -1009,7 +1056,6 @@ function drawViewer() {
     if (x.cell === null) continue;
     badge(g, x.center, x, px);
   }
-  g.restore();
 }
 
 // Step by step: only the piece in hand, its place and turn.
@@ -1056,9 +1102,10 @@ function polyArea(pts) {
 }
 
 function poly(g, pts) {
+  const q = pts.map(vp);
   g.beginPath();
-  g.moveTo(pts[0][0], pts[0][1]);
-  for (const p of pts.slice(1)) g.lineTo(p[0], p[1]);
+  g.moveTo(q[0][0], q[0][1]);
+  for (const p of q.slice(1)) g.lineTo(p[0], p[1]);
   g.closePath();
 }
 
@@ -1079,7 +1126,9 @@ function drawFilled(g, board, px) {
   g.setLineDash([]);
 }
 
-function arrow(g, a, b, color, px) {
+function arrow(g, a0, b0, color, px) {
+  const a = vp(a0);
+  const b = vp(b0);
   const ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
   const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
   if (len < 20 * px) return;
@@ -1107,12 +1156,14 @@ function arrow(g, a, b, color, px) {
 
 function targetMarker(g, x, board, px) {
   const C = state.refView.C;
-  const pts = [
-    [x.col * C, x.row * C],
-    [(x.col + 1) * C, x.row * C],
-    [(x.col + 1) * C, (x.row + 1) * C],
-    [x.col * C, (x.row + 1) * C],
-  ].map(([a, b]) => applyH(board.H, a, b));
+  const pts =
+    x.quad ??
+    [
+      [x.col * C, x.row * C],
+      [(x.col + 1) * C, x.row * C],
+      [(x.col + 1) * C, (x.row + 1) * C],
+      [x.col * C, (x.row + 1) * C],
+    ].map(([a, b]) => applyH(board.H, a, b));
   poly(g, pts);
   g.fillStyle = `${COLORS[x.level]}55`;
   g.fill();
@@ -1122,10 +1173,12 @@ function targetMarker(g, x, board, px) {
 }
 
 // Number with rotation arrow: arc in the turn direction, degrees beside it.
-function badge(g, c, x, px0) {
+function badge(g, c0, x, px0) {
   // In the overview pieces are often only a few millimetres: shrink the label
   // along, show degrees only when zoomed in.
-  const side = Math.hypot(x.corners[1][0] - x.corners[0][0], x.corners[1][1] - x.corners[0][1]);
+  const c = vp(c0);
+  const [k0, k1] = [vp(x.corners[0]), vp(x.corners[1])];
+  const side = Math.hypot(k1[0] - k0[0], k1[1] - k0[1]);
   const sideScreen = side / px0;
   const px = px0 * Math.max(0.5, Math.min(1, sideScreen / 70));
   const r = 13 * px;
@@ -1356,8 +1409,9 @@ function zoomAt(sx, sy, k) {
 function clampView() {
   const cur = currentScene();
   if (!cur) return;
-  const w = cur.info.width * view.s;
-  const h = cur.info.height * view.s;
+  const im = viewImage(cur);
+  const w = im.width * view.s;
+  const h = im.height * view.s;
   view.tx = w <= view.cssW ? (view.cssW - w) / 2 : Math.min(0, Math.max(view.cssW - w, view.tx));
   view.ty = h <= view.cssH ? (view.cssH - h) / 2 : Math.min(0, Math.max(view.cssH - h, view.ty));
 }
@@ -1375,8 +1429,9 @@ function inside(pts, x, y) {
 function tapAt(sx, sy) {
   const cur = currentScene();
   if (!cur) return;
-  const x = (sx - view.tx) / view.s;
-  const y = (sy - view.ty) / view.s;
+  const { Mi } = viewImage(cur);
+  const v = [(sx - view.tx) / view.s, (sy - view.ty) / view.s];
+  const [x, y] = Mi ? applyH(Mi, v[0], v[1]) : v;
   const hit = state.result.suggestions.find(
     (u) => u.sceneId === cur.s.id && inside(cur.info.pieces[u.index].outline, x, y),
   );

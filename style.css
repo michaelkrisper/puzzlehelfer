@@ -349,16 +349,8 @@ canvas {
   vertical-align: -1px;
 }
 
-.sw.ok {
-  background: var(--ok);
-}
-
-.sw.maybe {
-  background: var(--maybe);
-}
-
 .sw.bad {
-  background: var(--bad);
+  background: #7d8996;
 }
 
 dialog {

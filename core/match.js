@@ -196,7 +196,9 @@
   const BETA = 8;
 
   // Coarse search over all places, rotations and quarter-cell offsets.
-  function coarseSearch(prep, sides, ref, free, keep) {
+  // fits(cell, rot): false rules a place out (knobs and holes against the
+  // gap sides of the finished part).
+  function coarseSearch(prep, sides, ref, free, keep, fits) {
     const { blocks, cols, rows, G } = ref;
     const bw = blocks.w;
     const bh = blocks.h;
@@ -210,6 +212,7 @@
           if (free && !free[r * cols + c]) continue;
           const bp = borderPenalty(sides, r, c, k, ref);
           if (bp > (prep.strictBorder ? 0 : 1)) continue;
+          if (fits && !fits(r * cols + c, k)) continue;
           const pen = bp + rp;
           let best = Infinity;
           for (let dy = -1; dy <= 1; dy++) {
@@ -325,10 +328,10 @@
   // Candidates of a piece: coarse over everything, fine over the best.
   // must: places with rotation that are always compared finely (e.g. from
   // feature points), even if the coarse search does not rank them high.
-  function candidates(prep, sides, ref, free, must = []) {
-    const coarse = coarseSearch(prep, sides, ref, free, 40);
+  function candidates(prep, sides, ref, free, must = [], fits = null) {
+    const coarse = coarseSearch(prep, sides, ref, free, 40, fits);
     for (const m of must) {
-      if (free && !free[m.cell]) continue;
+      if ((free && !free[m.cell]) || (fits && !fits(m.cell, m.rot))) continue;
       if (coarse.some((c) => c.cell === m.cell && c.rot === m.rot)) continue;
       const r = Math.floor(m.cell / ref.cols);
       const c = m.cell % ref.cols;
@@ -406,6 +409,15 @@
       const free = N - taken.reduce((a, b) => a + b, 0);
       const other = scored[scored.length - 1].logit - 1 + Math.log(Math.max(1, free - scored.length));
       let z = Math.exp(other - scored[0].logit);
+      // Places away from the finished part (opts.unknown, not compared): the
+      // piece may as well belong there, knobs and holes cannot be checked.
+      // Each counts like a candidate of middling colour without shape support;
+      // a plain piece is then no longer sure just because its rivals at the
+      // edge are taken.
+      if (opts.unknown) {
+        const mid = scored[scored.length >> 1];
+        z += Math.exp(-BETA * Math.log(mid.e + 10) + Math.log(opts.unknown) - scored[0].logit);
+      }
       for (const s of scored) z += Math.exp(s.logit - scored[0].logit);
       const top = scored[0];
       return {

@@ -86,6 +86,11 @@ const handlers = {
       seams: seamQuad(s.board?.seams),
     };
   },
+  straighten({ sceneId, image }) {
+    const s = scenes.get(sceneId);
+    if (!s?.board) throw new Error('Kein Puzzle im Foto');
+    return PH.pipeline.straightView(cv, image, s, ref);
+  },
   removeScene({ sceneId }) {
     scenes.delete(sceneId);
     return {};

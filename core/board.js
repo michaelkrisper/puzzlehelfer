@@ -69,16 +69,49 @@
   const terms = (u, v) => [1, u, v, u * u, u * v, v * v, u * u * u, u * u * v, u * v * v, v * v * v];
   const poly = (c, u, v) => terms(u, v).reduce((s, t, i) => s + t * c[i], 0);
 
+  // Shift of the grid at reference point x/y, bilinear between grid corners.
+  function fieldAt(f, x, y) {
+    const u = Math.min(f.cols - 1e-6, Math.max(0, x / f.C));
+    const v = Math.min(f.rows - 1e-6, Math.max(0, y / f.C));
+    const i = Math.floor(u);
+    const j = Math.floor(v);
+    const a = u - i;
+    const b = v - j;
+    const n = f.cols + 1;
+    const at = (A) =>
+      (A[j * n + i] * (1 - a) + A[j * n + i + 1] * a) * (1 - b) +
+      (A[(j + 1) * n + i] * (1 - a) + A[(j + 1) * n + i + 1] * a) * b;
+    return [at(f.dx), at(f.dy)];
+  }
+
   // Reference → photo. A homography alone does not fit if the reference was
   // photographed wavy or bent; corr first shifts the reference coordinates
   // smoothly. It is measured on the finished part, which lies flat on the
-  // table: this straightens the reference against it.
+  // table: this straightens the reference against it. field moves single grid
+  // corners onto the seams (seamField).
   function toScene(board, x, y) {
+    if (board.field) {
+      const [dx, dy] = fieldAt(board.field, x, y);
+      x += dx;
+      y += dy;
+    }
     const c = board.corr;
     if (!c) return PH.geom.applyH(board.H, x, y);
     const u = x / c.W;
     const v = y / c.H;
     return PH.geom.applyH(board.H, x + poly(c.dx, u, v), y + poly(c.dy, u, v));
+  }
+
+  // The table seen straight from above, about as many pixels per place as in
+  // the photo (board.k per reference pixel): outlines of pieces and gaps
+  // measured there are free of perspective. An oblique photo squashes far
+  // pieces by up to a fifth, more than knob shapes differ.
+  function toPlane(board, x, y) {
+    const [u, v] = PH.geom.applyH(board.Hi, x, y);
+    return [u * board.k, v * board.k];
+  }
+  function fromPlane(board, u, v) {
+    return PH.geom.applyH(board.H, u / board.k, v / board.k);
   }
 
   // Returns H (reference pixel → photo pixel) with correction corr, or null.
@@ -157,7 +190,7 @@
   // Photo (or mask) in grid coordinates of the reference.
   function warpToRef(cv, mat, board, ref, interp) {
     const out = new cv.Mat();
-    if (!board.corr) {
+    if (!board.corr && !board.field) {
       const Hm = cv.matFromArray(3, 3, cv.CV_64F, board.H);
       cv.warpPerspective(
         mat,
@@ -260,7 +293,7 @@
     return col.map(([a, b]) => [Math.min(2, Math.max(0.5, a)), b]);
   }
 
-  // Outlines of the finished part in the photo, oriented so that the free
+  // Outlines of the finished part in the plane, oriented so that the free
   // table lies to the right: a gap is then traversed clockwise, just like the
   // piece that belongs in it.
   function boardOutlines(cv, bigMask, board, C) {
@@ -272,7 +305,8 @@
       const c = contours.get(i);
       if (c.data32S.length > 40) {
         const raw = [];
-        for (let j = 0; j < c.data32S.length; j += 2) raw.push([c.data32S[j], c.data32S[j + 1]]);
+        for (let j = 0; j < c.data32S.length; j += 2)
+          raw.push(toPlane(board, c.data32S[j], c.data32S[j + 1]));
         let pts = PH.piece.smoothClosed(PH.piece.arcResample(raw, 1), 2);
         const isHole = hier.data32S[i * 4 + 3] >= 0;
         const area = PH.geom.polygonArea(pts);
@@ -283,7 +317,7 @@
     }
     contours.delete();
     hier.delete();
-    const corner = (r, c) => toScene(board, c * C, r * C);
+    const corner = (r, c) => toPlane(board, ...toScene(board, c * C, r * C));
     const nearest = (q, maxD) => {
       let best = null;
       for (let li = 0; li < lines.length; li++) {
@@ -317,36 +351,70 @@
   function registerBoard(cv, ref, sceneMat, sceneGray, bigMask, sf = null) {
     const hit = homographyToScene(cv, ref, sceneGray, bigMask, sf);
     if (!hit) return null;
-    const { H, corr } = hit;
+    hit.field = seamField(cv, hit, ref, sceneGray, bigMask);
+    const { H, corr, field } = hit;
     const { C, G, W, cols, rows } = ref;
     const mw = warpToRef(cv, bigMask, hit, ref, cv.INTER_NEAREST);
     const mask = new Uint8Array(mw.data);
     mw.delete();
 
     // Second evidence: the photo looks like the reference at this place. Helps
-    // where dark pieces in the finished part leave gaps in the mask.
-    const sw = warpToRef(cv, sceneMat, hit, ref, cv.INTER_LINEAR);
+    // where dark pieces in the finished part leave gaps in the mask. The
+    // picture content follows the feature points, not the seams.
+    const sw = warpToRef(cv, sceneMat, { H, corr }, ref, cv.INTER_LINEAR);
     const sg = grayOf(sw.data, W * ref.H);
     const lab = PH.segment.rgbaToLab(sw.data, ref.W * ref.H);
     sw.delete();
     const rg = grayOf(ref.rgba.data, W * ref.H);
     const filled = [];
     const isFilled = new Uint8Array(cols * rows);
+    // Places the photo does not show (a photo of part of the puzzle) are
+    // neither filled nor free.
+    const unseen = [];
+    const inPhoto = (x, y) => {
+      const [sx, sy] = toScene(hit, x * C, y * C);
+      return sx >= 0 && sy >= 0 && sx < sceneMat.cols && sy < sceneMat.rows;
+    };
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
+        if (![0.3, 0.7].every((u) => inPhoto(c + u, r + 0.3) && inPhoto(c + u, r + 0.7))) {
+          unseen.push(r * cols + c);
+          continue;
+        }
+        // Holes of the piece reach a third into the place; with the grid on
+        // the seams a piece covers well over half of the middle, a gap with
+        // knobs reaching in well under half.
         let f = fraction(mask, W, (c + 0.3) * C, (r + 0.3) * C, (c + 0.7) * C, (r + 0.7) * C, true);
-        if (f > 0.25 && f <= 0.75 && cellNcc(sg, rg, W, c, r, C) > 0.6) f = 1;
-        if (f > 0.75) {
+        if (f > 0.1 && f <= 0.5 && cellNcc(sg, rg, W, c, r, C) > 0.6) f = 1;
+        if (f > 0.5) {
           isFilled[r * cols + c] = 1;
           filled.push(r * cols + c);
         }
       }
     }
     if (filled.length < 2) return null;
+    const isUnseen = new Uint8Array(cols * rows);
+    for (const u of unseen) isUnseen[u] = 1;
 
     // Gaps: if the neighbour's knob reaches in, the piece needs a hole there;
     // if the neighbour misses a bit, it needs a knob.
     const holes = [];
+    const sides = filled
+      .filter((_, i) => i % Math.ceil(filled.length / 200) === 0)
+      .map((cell) => {
+        const r = Math.floor(cell / cols);
+        const c = cell % cols;
+        const q = [
+          [c, r],
+          [c + 1, r],
+          [c + 1, r + 1],
+          [c, r + 1],
+        ].map(([x, y]) => toScene(hit, x * C, y * C));
+        return Math.sqrt(Math.abs(PH.geom.polygonArea(q))) / C;
+      })
+      .sort((p, q) => p - q);
+    hit.k = sides[sides.length >> 1];
+    hit.Hi = PH.geom.invertH(H);
     const outlines = boardOutlines(cv, bigMask, hit, C);
     const a = 0.3 * C;
     const b = 0.7 * C;
@@ -354,7 +422,7 @@
     const d1 = 0.22 * C;
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        if (isFilled[r * cols + c]) continue;
+        if (isFilled[r * cols + c] || isUnseen[r * cols + c]) continue;
         for (let d = 0; d < 4; d++) {
           const [dx, dy] = PH.match.DIRS[d];
           const nr = r + dy;
@@ -404,20 +472,23 @@
         pairs.push([Array.from(sb.data.subarray(o, o + 3)), Array.from(ref.blocks.data.subarray(o, o + 3))]);
       }
     }
-    return { H, corr, inliers: hit.inliers, filled, holes, color: fitColor(pairs) };
+    return {
+      H,
+      Hi: hit.Hi,
+      k: hit.k,
+      corr,
+      field,
+      inliers: hit.inliers,
+      filled,
+      unseen,
+      holes,
+      color: fitColor(pairs),
+    };
   }
 
-  // The real piece grid from the seams of the finished part: the box
-  // picture often shows a little more or less than the puzzle, then the grid
-  // laid over the box misses the pieces by a fraction of a place (measured:
-  // rows 0.94 places high, shifted by a third). The scene is mapped into the
-  // reference at F px per reference px; seams are thin dark lines (black-hat),
-  // averaged per column and row over occupied places; per axis the period and
-  // phase with the strongest comb, and the outer edges of the finished part.
-  // Result in places of the current grid, or null if the seams are unclear.
-  function seamGrid(cv, board, ref, sceneGray, bigMask) {
-    const F = 2;
-    const { C, cols, rows } = ref;
+  // Photo and finished part in grid coordinates at F px per reference px;
+  // d: seams as thin dark lines (black-hat), m: mask of the finished part.
+  function seamImage(cv, board, ref, sceneGray, bigMask, F) {
     const W = ref.W * F;
     const H = ref.H * F;
     const mx = new Float32Array(W * H);
@@ -440,6 +511,120 @@
     const d = Uint8Array.from(wg.data);
     const m = Uint8Array.from(wm.data);
     for (const x of [mapX, mapY, wg, wm, k]) x.delete();
+    return { d, m, W, H };
+  }
+
+  // Feature points leave plain areas (sky, water) to the smooth correction,
+  // which misses the pieces there by up to half a place (Great Wave sky).
+  // Seams and the outline of the finished part show where the grid lines
+  // really run: per grid corner the shift in x and in y, at most half a
+  // place, that puts the most of them onto the three nearest grid lines.
+  // Median over the neighbouring corners; corners without lines around
+  // (inside large gaps) take the mean of their neighbours.
+  function seamField(cv, board, ref, sceneGray, bigMask) {
+    const F = 2;
+    const { C, cols, rows } = ref;
+    const { d, m, W, H } = seamImage(cv, board, ref, sceneGray, bigMask, F);
+    const E = new Float32Array(W * H);
+    for (let y = 1; y < H - 1; y++) {
+      for (let x = 1; x < W - 1; x++) {
+        const i = y * W + x;
+        const v = m[i];
+        const edge = v !== m[i - 1] || v !== m[i + 1] || v !== m[i - W] || v !== m[i + W];
+        E[i] = (v ? Math.min(d[i], 60) : 0) + (edge ? 40 : 0);
+      }
+    }
+    const L = C * F;
+    const R = Math.round(L / 2);
+    const span = Math.round(1.5 * L);
+    // At least a weak line over a third of the comb.
+    const minScore = 5 * 6 * span;
+    const n1 = cols + 1;
+    const N = n1 * (rows + 1);
+    const raw = [new Float32Array(N).fill(Number.NaN), new Float32Array(N).fill(Number.NaN)];
+    const sx = new Float64Array(2 * R + 1);
+    const sy = new Float64Array(2 * R + 1);
+    let found = 0;
+    for (let j = 0; j <= rows; j++) {
+      for (let i = 0; i <= cols; i++) {
+        sx.fill(0);
+        sy.fill(0);
+        const x0 = i * L;
+        const y0 = j * L;
+        for (let o = -R; o <= R; o++) {
+          for (let k = -1; k <= 1; k++) {
+            const x = x0 + k * L + o;
+            if (x >= 0 && x < W)
+              for (let y = Math.max(0, y0 - span); y < Math.min(H, y0 + span); y++) sx[o + R] += E[y * W + x];
+            const y = y0 + k * L + o;
+            if (y >= 0 && y < H)
+              for (let x2 = Math.max(0, x0 - span); x2 < Math.min(W, x0 + span); x2++)
+                sy[o + R] += E[y * W + x2];
+          }
+        }
+        [sx, sy].forEach((s, a) => {
+          let best = 0;
+          for (let q = 1; q < s.length; q++) if (s[q] > s[best]) best = q;
+          const med = Float64Array.from(s).sort()[R];
+          if (s[best] >= minScore && s[best] >= 1.6 * med) {
+            raw[a][j * n1 + i] = (best - R) / F;
+            found++;
+          }
+        });
+      }
+    }
+    if (found < 0.1 * N) return null;
+    const [dx, dy] = raw.map((A) => {
+      let B = new Float32Array(N).fill(Number.NaN);
+      for (let j = 0; j <= rows; j++) {
+        for (let i = 0; i <= cols; i++) {
+          const v = [];
+          for (let jj = Math.max(0, j - 1); jj <= Math.min(rows, j + 1); jj++)
+            for (let ii = Math.max(0, i - 1); ii <= Math.min(cols, i + 1); ii++)
+              if (!Number.isNaN(A[jj * n1 + ii])) v.push(A[jj * n1 + ii]);
+          if (v.length >= 3) B[j * n1 + i] = v.sort((p, q) => p - q)[v.length >> 1];
+        }
+      }
+      for (let pass = 0; pass < 4; pass++) {
+        const next = B.slice();
+        for (let j = 0; j <= rows; j++) {
+          for (let i = 0; i <= cols; i++) {
+            if (!Number.isNaN(B[j * n1 + i])) continue;
+            let s = 0;
+            let c = 0;
+            for (const [ii, jj] of [
+              [i - 1, j],
+              [i + 1, j],
+              [i, j - 1],
+              [i, j + 1],
+            ]) {
+              if (ii < 0 || jj < 0 || ii > cols || jj > rows || Number.isNaN(B[jj * n1 + ii])) continue;
+              s += B[jj * n1 + ii];
+              c++;
+            }
+            if (c) next[j * n1 + i] = s / c;
+          }
+        }
+        B = next;
+      }
+      return B.map((v) => (Number.isNaN(v) ? 0 : v));
+    });
+    return { cols, rows, C, dx, dy };
+  }
+
+  // The real piece grid from the seams of the finished part: the box
+  // picture often shows a little more or less than the puzzle, then the grid
+  // laid over the box misses the pieces by a fraction of a place (measured:
+  // rows 0.94 places high, shifted by a third). The scene is mapped into the
+  // reference at F px per reference px; seams are thin dark lines (black-hat),
+  // averaged per column and row over occupied places; per axis the period and
+  // phase with the strongest comb, and the outer edges of the finished part.
+  // Result in places of the current grid, or null if the seams are unclear.
+  function seamGrid(cv, board, ref, sceneGray, bigMask) {
+    const F = 2;
+    const { C, cols, rows } = ref;
+    // Without the local field: it already pulls the grid onto the seams.
+    const { d, m, W, H } = seamImage(cv, { H: board.H, corr: board.corr }, ref, sceneGray, bigMask, F);
     const filled = new Set(board.filled);
     const px = new Float64Array(W);
     const py = new Float64Array(H);
@@ -511,5 +696,5 @@
     return gx && gy ? { x: gx, y: gy } : null;
   }
 
-  PH.board = { registerBoard, toScene, fitColor, toGray, seamGrid };
+  PH.board = { registerBoard, toScene, toPlane, fromPlane, fitColor, toGray, seamGrid };
 })();

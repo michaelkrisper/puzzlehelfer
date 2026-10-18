@@ -181,7 +181,7 @@ try {
   await wait(300);
   const res = await evaluate(`(() => {
     const info = state.result.scenes[0];
-    return { width: info.width, sugg: state.result.suggestions.map((s) => ({ c: s.center, row: s.row, col: s.col, turn: s.turn, level: s.level })) };
+    return { width: info.width, sugg: state.result.suggestions.map((s) => ({ c: s.center, row: s.row, col: s.col, turn: s.turn, sure: s.sure })) };
   })()`);
   const k = res.width / truth.scene.width;
   let right = 0;
@@ -192,7 +192,7 @@ try {
     const dt = ((((s.turn + t.angle + 180) % 360) + 360) % 360) - 180;
     const good = s.row === t.row && s.col === t.col && Math.abs(dt) < 20;
     if (good) right++;
-    else if (s.level === 'ok') wrongSure++;
+    else if (s.sure) wrongSure++;
   }
   check(
     right >= truth.loose.length * 0.8,
@@ -201,7 +201,7 @@ try {
   if (partial) {
     check(await evaluate('!!state.result.scenes[0].board'), 'half-finished puzzle in photo detected');
     check(
-      await evaluate(`state.result.suggestions.filter((s) => s.level === 'ok' && s.target).length > 0`),
+      await evaluate(`state.result.suggestions.filter((s) => s.sure && s.target).length > 0`),
       'arrows to the places',
     );
   }
@@ -241,7 +241,7 @@ try {
 
   // Details of one piece
   await evaluate(`(() => {
-    const s = state.result.suggestions.find((x) => x.level === 'ok');
+    const s = state.result.suggestions.find((x) => x.sure);
     openDetail(s, state.result.scenes[0]);
   })()`);
   check(await evaluate(`document.getElementById('detail').open`), 'detail view opens');
