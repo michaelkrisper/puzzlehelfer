@@ -37,10 +37,14 @@ no photo leaves the device. The app's interface is in German.
 6. Put pieces in, **new round**, photograph again. Every placed piece gives
    the app more gaps to work with.
 
-Several photos per round are possible (more pieces or close-ups). A piece
-that appears in two photos is recognised and planned only once. A photo may
-show only part of the puzzle; places outside it are not suggested, and
-"Von oben (begradigt)" shows the photo straight from above.
+Several photos per round are possible (more pieces or close-ups; pick
+several at once with "Bild wählen"). A photo may show only part of the
+puzzle; places outside it are not suggested. Photos that show some of the
+finished part are put together into one picture of the table from above
+("Tisch von oben", the default with two or more): a piece on two photos
+lies at the same spot and is planned once, from the sharper photo.
+"Korrigieren" there crops the table (drag the corners, pieces outside are
+ignored) and toggles places the recognition got wrong (tap: free/filled).
 
 Pieces are numbered by probability: 1 is the likeliest, the step card shows
 the percentage. An honest low percentage is better than a wrong "sure".

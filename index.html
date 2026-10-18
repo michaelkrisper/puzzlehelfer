@@ -95,6 +95,9 @@
             </div>
           </div>
           <div class="viewer-wrap"><canvas id="viewer"></canvas></div>
+          <p id="edit-hint" class="muted" hidden>
+            Blaue Ecken ziehen: nur dieser Teil des Tisches zählt. Platz antippen: frei (blau) ↔ belegt.
+          </p>
           <div class="legend">
             <span>1, 2, 3 … nach Wahrscheinlichkeit</span><span><i class="sw bad"></i>kein Platz</span>
             <span class="muted">Zwei Finger zoomen, Teil antippen für Details</span>
@@ -102,7 +105,8 @@
           <div class="row">
             <button type="button" class="btn small" id="all-arrows">Alle Pfeile zeigen</button>
             <button type="button" class="btn small" id="edge-only">Nur Rand</button>
-            <button type="button" class="btn small" id="straight" hidden>Von oben (begradigt)</button>
+            <button type="button" class="btn small" id="table" hidden>Tisch von oben</button>
+            <button type="button" class="btn small" id="table-edit" hidden>Korrigieren</button>
             <button type="button" class="btn small" id="undo-placed" hidden>Rückgängig</button>
           </div>
           <h3>Alle gefundenen Teile</h3>

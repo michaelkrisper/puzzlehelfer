@@ -227,18 +227,19 @@
     return g;
   }
 
-  // Normalised cross-correlation of two grey images inside a cell; 0 if the
-  // reference has too little structure there.
-  function cellNcc(a, b, W, c, r, C) {
+  // Normalised cross-correlation of two grey images inside a cell (margin m
+  // off each side, photo shifted by dx, dy); 0 if the reference, or with
+  // m > 0.15 the photo, has too little structure there.
+  function cellNcc(a, b, W, c, r, C, m = 0.15, dx = 0, dy = 0) {
     let n = 0;
     let sa = 0;
     let sb = 0;
     let saa = 0;
     let sbb = 0;
     let sab = 0;
-    for (let y = Math.round((r + 0.15) * C); y < (r + 0.85) * C; y++) {
-      for (let x = Math.round((c + 0.15) * C); x < (c + 0.85) * C; x++) {
-        const p = a[y * W + x];
+    for (let y = Math.round((r + m) * C); y < (r + 1 - m) * C; y++) {
+      for (let x = Math.round((c + m) * C); x < (c + 1 - m) * C; x++) {
+        const p = a[(y + dy) * W + x + dx];
         const q = b[y * W + x];
         n++;
         sa += p;
@@ -250,8 +251,15 @@
     }
     const va = saa - (sa * sa) / n;
     const vb = sbb - (sb * sb) / n;
-    if (vb / n < 36) return 0;
+    if (vb / n < 36 || (m > 0.15 && va / n < 9)) return 0;
     return (sab - (sa * sb) / n) / Math.sqrt(Math.max(1e-6, va * vb));
+  }
+
+  function nccNear(a, b, W, c, r, C) {
+    let best = -1;
+    for (let dy = -2; dy <= 2; dy++)
+      for (let dx = -2; dx <= 2; dx++) best = Math.max(best, cellNcc(a, b, W, c, r, C, 0.3, dx, dy));
+    return best;
   }
 
   function fraction(mask, W, x0, y0, x1, y1, want) {
@@ -386,6 +394,12 @@
         // knobs reaching in well under half.
         let f = fraction(mask, W, (c + 0.3) * C, (r + 0.3) * C, (c + 0.7) * C, (r + 0.7) * C, true);
         if (f > 0.25 && f <= 0.5 && cellNcc(sg, rg, W, c, r, C) > 0.6) f = 1;
+        // Dark blue pieces pass as black mat in the mask. Their print still
+        // matches in the middle of the place, where the knobs of neighbours
+        // around a free place do not reach; small shifts allowed, the photo
+        // follows the feature points only roughly at its far end (measured on
+        // dark pieces 0.58–0.88, on free places at most 0.46).
+        else if (f <= 0.25 && nccNear(sg, rg, W, c, r, C) > 0.55) f = 1;
         if (f > 0.5) {
           isFilled[r * cols + c] = 1;
           filled.push(r * cols + c);

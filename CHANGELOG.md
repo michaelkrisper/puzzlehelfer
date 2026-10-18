@@ -18,8 +18,22 @@
   photo squashed far pieces by up to a fifth, more than knob shapes differ.
 - Photos of part of the puzzle: places the photo does not show are not
   suggested; gap sides come from every photo with the finished part.
-  "Von oben (begradigt)" shows the photo straight from above, the puzzle
-  upright as in the reference, with arrows and numbers.
+- "Tisch von oben": all photos with some of the finished part as one
+  picture of the table from above, the puzzle upright as in the reference,
+  each spot from the closest photo; with arrows, numbers and the free
+  places. Default with two or more such photos; "Bild wählen" takes several
+  photos at once and searches places once at the end.
+- "Korrigieren" in the table view: drag the corners to keep only part of
+  the table (pieces outside are ignored), tap a place to switch it between
+  free and filled; "Fertig" searches again, "Rückgängig" undoes.
+- A piece on several photos with the finished part is matched by its spot
+  on the table instead of its looks (plain pieces look alike), also across
+  three photos; the sharper photo is kept. Five sky photos: 83 pieces
+  instead of 88 counted.
+- Dark blue pieces in the finished part no longer count as free places:
+  the mask takes them for the black mat, the picture in the middle of the
+  place still matches the reference (15 → 2 wrong free places on five
+  photos).
 - The finished part cut off by the photo edge is no longer reported as an
   unclear blob.
 

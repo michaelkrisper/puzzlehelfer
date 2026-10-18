@@ -24,6 +24,26 @@ const ready = new Promise((resolve) => self.cv.then(resolve)).then((m) => {
 let ref = null;
 let refQuad = null;
 const scenes = new Map(); // id → result of analyzeScene
+const previews = new Map(); // id → photo at most 2400 px, for the table view
+
+function shrink(image, max) {
+  const f = Math.min(1, max / Math.max(image.width, image.height));
+  if (f === 1) return image;
+  const src = cv.matFromImageData(image);
+  const dst = new cv.Mat();
+  cv.resize(
+    src,
+    dst,
+    new cv.Size(Math.round(image.width * f), Math.round(image.height * f)),
+    0,
+    0,
+    cv.INTER_AREA,
+  );
+  const out = { data: new Uint8ClampedArray(dst.data), width: dst.cols, height: dst.rows };
+  src.delete();
+  dst.delete();
+  return out;
+}
 
 const progressFor = (id) => (text) => postMessage({ type: 'progress', id, text });
 
@@ -66,6 +86,7 @@ const handlers = {
     ref = PH.reference.buildReference(cv, image, quad, cols, rows, prev);
     // Places depend on the grid, so old analyses no longer fit.
     scenes.clear();
+    previews.clear();
     // New feature points go back to the app, which stores them.
     const fresh = ref.feat !== prev?.feat ? { key: ref.key, feat: ref.feat } : null;
     // Finer copy for the views, which can be zoomed.
@@ -77,6 +98,7 @@ const handlers = {
     if (!ref) throw new Error('Keine Vorlage');
     const s = PH.pipeline.analyzeScene(cv, image, ref, progressFor(id));
     scenes.set(sceneId, s);
+    previews.set(sceneId, shrink(image, 2400));
     return {
       pieces: s.pieces.length,
       unclear: s.unclear.length,
@@ -86,20 +108,29 @@ const handlers = {
       seams: seamQuad(s.board?.seams),
     };
   },
-  straighten({ sceneId, image }) {
-    const s = scenes.get(sceneId);
-    if (!s?.board) throw new Error('Kein Puzzle im Foto');
-    return PH.pipeline.straightView(cv, image, s, ref);
+  // All photos with the puzzle as one picture from above.
+  table() {
+    const ids = [...scenes.keys()];
+    const t = PH.pipeline.tableView(
+      cv,
+      ids.map((k) => scenes.get(k)),
+      ids.map((k) => previews.get(k)),
+      ref,
+    );
+    if (!t) throw new Error('Kein Foto zeigt den fertigen Teil');
+    return { ...t, views: t.views.map((v) => ({ sceneId: ids[v.scene], M: v.M })) };
   },
   removeScene({ sceneId }) {
     scenes.delete(sceneId);
+    previews.delete(sceneId);
     return {};
   },
   clearScenes() {
     scenes.clear();
+    previews.clear();
     return {};
   },
-  solve({ id, placed = [], removed = [] }) {
+  solve({ id, placed = [], removed = [], cells = [], crop = null }) {
     const ids = [...scenes.keys()];
     const list = ids.map((k) => scenes.get(k));
     const local = (arr) =>
@@ -108,9 +139,13 @@ const handlers = {
       progress: progressFor(id),
       placed: local(placed),
       removed: local(removed),
+      cells,
+      crop,
     });
+    const { free } = PH.pipeline.boardState(ref, list, cells);
     return {
       suggestions: sugg.map((s) => ({ ...s, sceneId: ids[s.scene] })),
+      free: [...free.keys()].filter((c) => free[c]),
       scenes: ids.map((sid, i) => {
         const s = list[i];
         return {

@@ -524,12 +524,18 @@
     return PH.match.assign(items, ref, { filled: ctx.filled, holes: ctx.holes, unknown: ctx.unknown });
   }
 
-  // The same piece in two photos (e.g. overview and close-up): all four side
-  // profiles and the colours agree at one of the four rotations. Returns
-  // index of the duplicate → index of the kept piece.
-  function findDuplicates(items, ref) {
+  // The same piece in two photos (e.g. overview and close-up): if both show
+  // the finished part, it lies at the same spot of the table (the plain
+  // pieces at the end look alike); otherwise all four side profiles and the
+  // colours agree at one of the four rotations. Kept is the sharper view.
+  // Returns index of the duplicate → index of the kept piece.
+  function findDuplicates(items, ref, scenes = []) {
     const dup = new Map();
     if (new Set(items.map((it) => it.scene)).size < 2) return dup;
+    const at = items.map((it) => {
+      const b = scenes[it.scene]?.board;
+      return b ? PH.geom.applyH(b.Hi, ...it.shape.center) : null;
+    });
     const prep = items.map((it) => PH.match.preparePiece(it.raw, ref.C, ref.G, null));
     const N = PH.piece.PROFILE_N;
     // Measured on photos of the same puzzle at two sizes: true duplicates are
@@ -564,35 +570,57 @@
     for (let i = 0; i < items.length; i++) {
       for (let j = i + 1; j < items.length; j++) {
         if (items[i].scene === items[j].scene) continue;
+        if (at[i] && at[j]) {
+          const d = Math.hypot(at[i][0] - at[j][0], at[i][1] - at[j][1]) / ref.C;
+          if (d < 0.5) pairs.push([d, i, j, true]);
+          continue;
+        }
         let best = Infinity;
         for (let k = 0; k < 4; k++) best = Math.min(best, score(i, j, k));
-        if (best < 2.2) pairs.push([best, i, j]);
+        if (best < 2.2) pairs.push([best, i, j, false]);
       }
     }
     pairs.sort((a, b) => a[0] - b[0]);
+    // By position a piece may be on three photos; by looks only pairs.
+    const parent = items.map((_, i) => i);
+    const find = (i) => {
+      while (parent[i] !== i) i = parent[i];
+      return i;
+    };
     const used = new Set();
-    for (const [, i, j] of pairs) {
-      if (used.has(i) || used.has(j)) continue;
-      used.add(i);
-      used.add(j);
-      const a = items[i].shape;
-      const b = items[j].shape;
-      if (a.quality * a.side >= b.quality * b.side) dup.set(j, i);
-      else dup.set(i, j);
+    for (const [, i, j, near] of pairs) {
+      if (!near) {
+        if (used.has(i) || used.has(j)) continue;
+        used.add(i);
+        used.add(j);
+      }
+      parent[find(i)] = find(j);
+    }
+    // Side in photo pixels: the closer photo.
+    const sharp = (it) => (it.shape.quality * it.shape.side) / (scenes[it.scene]?.scale ?? 1);
+    const groups = new Map();
+    for (let i = 0; i < items.length; i++) {
+      const r = find(i);
+      if (!groups.has(r)) groups.set(r, []);
+      groups.get(r).push(i);
+    }
+    for (const g of groups.values()) {
+      if (g.length < 2) continue;
+      const keep = g.reduce((a, b) => (sharp(items[b]) > sharp(items[a]) ? b : a));
+      for (const i of g) if (i !== keep) dup.set(i, keep);
     }
     return dup;
   }
 
-  // scenes: results of analyzeScene. Returns suggestions per piece.
-  function solve(ref, scenes, opts = {}) {
-    const progress = opts.progress ?? (() => {});
+  // Places of the finished part over all photos: filled, free (1) and the gap
+  // sides. A place counts as free only if some photo shows it (photos of part
+  // of the puzzle). cells: the user's corrections in order, {cell, free}.
+  function boardState(ref, scenes, cells = []) {
     const N = ref.cols * ref.rows;
     const free = new Uint8Array(N).fill(1);
     const filled = new Set();
     // Gap sides from every photo with the finished part, with outline first.
     const gapOf = new Map();
-    // A place counts as free only if some photo shows it (photos of part of
-    // the puzzle).
     const seen = new Uint8Array(N);
     let boards = 0;
     for (const s of scenes) {
@@ -607,7 +635,38 @@
       for (const [key, g] of s.board.holes) if (!gapOf.get(key)?.hole) gapOf.set(key, g);
     }
     if (boards) for (let c = 0; c < N; c++) if (!seen[c]) free[c] = 0;
-    let holes = [...gapOf];
+    for (const { cell, free: f } of cells) {
+      free[cell] = f ? 1 : 0;
+      if (f) filled.delete(cell);
+      else filled.add(cell);
+      // Gap sides of the neighbours towards a place that turned out free came
+      // from no piece.
+      if (f)
+        for (let d = 0; d < 4; d++) {
+          const [dx, dy] = PH.match.DIRS[d];
+          const r = Math.floor(cell / ref.cols) + dy;
+          const c = (cell % ref.cols) + dx;
+          if (r >= 0 && c >= 0 && r < ref.rows && c < ref.cols)
+            gapOf.delete(`${r * ref.cols + c},${(d + 2) % 4}`);
+        }
+    }
+    return { free, filled, holes: [...gapOf] };
+  }
+
+  // Is the piece inside the part of the table the user kept (crop: [u0, v0,
+  // u1, v1] in reference pixels)? Photos without the finished part cannot
+  // tell.
+  function inCrop(crop, scene, piece) {
+    if (!crop || !scene.board) return true;
+    const [u, v] = PH.geom.applyH(scene.board.Hi, ...piece.shape.center);
+    return u >= crop[0] && u <= crop[2] && v >= crop[1] && v <= crop[3];
+  }
+
+  // scenes: results of analyzeScene. Returns suggestions per piece.
+  function solve(ref, scenes, opts = {}) {
+    const progress = opts.progress ?? (() => {});
+    const N = ref.cols * ref.rows;
+    const { free, filled, holes } = boardState(ref, scenes, opts.cells);
     // Places of joined groups are taken for loose pieces.
     for (const s of scenes)
       for (const g of s.groups ?? [])
@@ -620,7 +679,6 @@
     const placed = new Map((opts.placed ?? []).map((p) => [`${p.scene}:${p.index}`, p]));
     // Removed by the user (no piece, or a wrong find): left out entirely.
     const removed = new Set((opts.removed ?? []).map((p) => `${p.scene}:${p.index}`));
-    holes = [...holes];
     for (const p of placed.values()) {
       const piece = scenes[p.scene]?.pieces[p.index];
       if (!piece) continue;
@@ -658,7 +716,7 @@
     const items = [];
     scenes.forEach((s, si) => {
       s.pieces.forEach((p, pi) => {
-        if (placed.has(`${si}:${pi}`) || removed.has(`${si}:${pi}`)) return;
+        if (placed.has(`${si}:${pi}`) || removed.has(`${si}:${pi}`) || !inCrop(opts.crop, s, p)) return;
         items.push({
           scene: si,
           index: pi,
@@ -670,7 +728,7 @@
         });
       });
     });
-    const dup = findDuplicates(items, ref);
+    const dup = findDuplicates(items, ref, scenes);
     const active = items.filter((_, i) => !dup.has(i));
     const stats = statsColor(active, ref);
     const colors = scenes.map((s) => s.board?.color ?? stats);
@@ -790,65 +848,163 @@
     return { cell: cand.cell, row, col, rot: cand.rot, turn, target, quad, e: cand.e };
   }
 
-  // The photo seen straight from above, the puzzle upright as in the
-  // reference (a photo of part of the puzzle from the side). image: the photo
-  // at the size given to analyzeScene. M: working-image pixel → view pixel.
-  function straightView(cv, image, scene, ref) {
-    const { board, width: w, height: h, scale } = scene;
-    const toView = (x, y) => PH.board.toPlane(board, x, y);
-    const pts = [];
-    for (let i = 0; i <= 8; i++)
-      for (const [x, y] of [
-        [(w * i) / 8, 0],
-        [(w * i) / 8, h],
-        [0, (h * i) / 8],
-        [w, (h * i) / 8],
-      ])
-        pts.push(toView(x, y));
-    // Far off in an oblique photo the table stretches without end: at most
-    // half a puzzle around it.
-    const rw = board.k * ref.W;
-    const rh = board.k * ref.H;
-    const x0 = Math.max(-0.5 * rw, Math.min(...pts.map((p) => p[0])));
-    const x1 = Math.min(1.5 * rw, Math.max(...pts.map((p) => p[0])));
-    const y0 = Math.max(-0.5 * rh, Math.min(...pts.map((p) => p[1])));
-    const y1 = Math.min(1.5 * rh, Math.max(...pts.map((p) => p[1])));
-    // About as many pixels as the photo.
-    const f = Math.min(1 / scale, Math.sqrt((image.width * image.height) / ((x1 - x0) * (y1 - y0))));
-    const W = Math.round((x1 - x0) * f);
-    const H = Math.round((y1 - y0) * f);
-    const k = board.k * f;
-    const Hi = board.Hi;
-    // Working pixel → plane → view.
-    const M = [
-      k * Hi[0] - f * x0 * Hi[6],
-      k * Hi[1] - f * x0 * Hi[7],
-      k * Hi[2] - f * x0 * Hi[8],
-      k * Hi[3] - f * y0 * Hi[6],
-      k * Hi[4] - f * y0 * Hi[7],
-      k * Hi[5] - f * y0 * Hi[8],
-      Hi[6],
-      Hi[7],
-      Hi[8],
-    ];
-    // The photo is larger than the working image by 1 / scale.
-    const Mf = M.map((v, i) => (i % 3 < 2 ? v * scale : v));
-    const src = cv.matFromImageData(image);
-    const dst = new cv.Mat();
-    const m = cv.matFromArray(3, 3, cv.CV_64F, Mf);
-    cv.warpPerspective(
-      src,
-      dst,
-      m,
-      new cv.Size(W, H),
-      cv.INTER_LINEAR,
-      cv.BORDER_CONSTANT,
-      new cv.Scalar(0, 0, 0, 255),
+  // All photos with the finished part as one picture of the table from
+  // above, the puzzle upright as in the reference. images: per scene the photo
+  // or a smaller copy (null: left out). Each spot comes from the photo that
+  // shows it sharpest: the closest one, not at its edge. Returns the picture,
+  // per scene M (working pixel → table pixel), the grid corners in table
+  // pixels ((cols + 1) × (rows + 1), null where no photo shows them), and
+  // table pixel = (reference pixel − [x0, y0]) · f.
+  function tableView(cv, scenes, images, ref, maxPixels = 12e6) {
+    const { W, H, C, cols, rows } = ref;
+    const list = [];
+    scenes.forEach((s, i) => {
+      if (s.board && images[i]) list.push({ s, img: images[i], i });
+    });
+    if (!list.length) return null;
+    const { applyH, mulH } = PH.geom;
+    // Extent: what the photos show, at most half a puzzle around it (far off
+    // in an oblique photo the table stretches without end).
+    let x0 = 0;
+    let y0 = 0;
+    let x1 = W;
+    let y1 = H;
+    for (const { s } of list) {
+      const Hi = s.board.Hi;
+      const side = Math.sign(Hi[6] * s.width * 0.5 + Hi[7] * s.height * 0.5 + Hi[8]);
+      for (let k = 0; k <= 16; k++)
+        for (const [a, b] of [
+          [k / 16, 0],
+          [k / 16, 1],
+          [0, k / 16],
+          [1, k / 16],
+        ]) {
+          const x = a * s.width;
+          const y = b * s.height;
+          // Beyond the horizon.
+          if (Math.sign(Hi[6] * x + Hi[7] * y + Hi[8]) !== side) continue;
+          const [u, v] = applyH(Hi, x, y);
+          x0 = Math.min(x0, Math.max(-0.5 * W, u));
+          x1 = Math.max(x1, Math.min(1.5 * W, u));
+          y0 = Math.min(y0, Math.max(-0.5 * H, v));
+          y1 = Math.max(y1, Math.min(1.5 * H, v));
+        }
+    }
+    // As sharp as the sharpest photo, within the pixel budget.
+    const sharpest = Math.max(...list.map(({ s }) => s.board.k / s.scale));
+    const f = Math.min(sharpest, Math.sqrt(maxPixels / ((x1 - x0) * (y1 - y0))));
+    const mw = Math.round((x1 - x0) * f);
+    const mh = Math.round((y1 - y0) * f);
+    const out = new Uint8ClampedArray(mw * mh * 4);
+    for (let i = 0; i < mw * mh; i++) {
+      out[i * 4] = out[i * 4 + 1] = out[i * 4 + 2] = 24;
+      out[i * 4 + 3] = 255;
+    }
+    const best = new Float32Array(mw * mh).fill(-1);
+    const det = new Map(
+      list.map(({ s }) => {
+        const h = s.board.H;
+        return [
+          s,
+          h[0] * (h[4] * h[8] - h[5] * h[7]) -
+            h[1] * (h[3] * h[8] - h[5] * h[6]) +
+            h[2] * (h[3] * h[7] - h[4] * h[6]),
+        ];
+      }),
     );
-    const rgba = new Uint8ClampedArray(dst.data);
-    for (const x of [src, dst, m]) x.delete();
-    return { rgba, w: W, h: H, M };
+    // Sharpness of a scene at reference point (u, v): photo pixels per
+    // reference pixel (area), falling to 0 within 5 % of the photo edge.
+    const quality = (s, u, v) => {
+      const h = s.board.H;
+      const w = h[6] * u + h[7] * v + h[8];
+      const [x, y] = [(h[0] * u + h[1] * v + h[2]) / w, (h[3] * u + h[4] * v + h[5]) / w];
+      if (x < 0 || y < 0 || x >= s.width || y >= s.height) return -1;
+      const edge = Math.min(x, y, s.width - x, s.height - y) / (0.05 * Math.max(s.width, s.height));
+      return (Math.abs(det.get(s)) / Math.abs(w * w * w) / (s.scale * s.scale)) * Math.min(1, edge);
+    };
+    const T = [f, 0, -f * x0, 0, f, -f * y0, 0, 0, 1];
+    for (const it of list) it.M = mulH(T, it.s.board.Hi);
+    for (const { s, img, M } of list) {
+      const h = s.board.H;
+      // Part of the table this photo covers.
+      let rx0 = mw;
+      let ry0 = mh;
+      let rx1 = 0;
+      let ry1 = 0;
+      const side = Math.sign(M[6] * s.width * 0.5 + M[7] * s.height * 0.5 + M[8]);
+      for (let k = 0; k <= 16; k++)
+        for (const [a, b] of [
+          [k / 16, 0],
+          [k / 16, 1],
+          [0, k / 16],
+          [1, k / 16],
+        ]) {
+          const x = a * s.width;
+          const y = b * s.height;
+          if (Math.sign(M[6] * x + M[7] * y + M[8]) !== side) continue;
+          const [X, Y] = applyH(M, x, y);
+          rx0 = Math.min(rx0, X);
+          ry0 = Math.min(ry0, Y);
+          rx1 = Math.max(rx1, X);
+          ry1 = Math.max(ry1, Y);
+        }
+      rx0 = Math.max(0, Math.floor(rx0));
+      ry0 = Math.max(0, Math.floor(ry0));
+      rx1 = Math.min(mw, Math.ceil(rx1));
+      ry1 = Math.min(mh, Math.ceil(ry1));
+      if (rx1 <= rx0 || ry1 <= ry0) continue;
+      const rw = rx1 - rx0;
+      const rh = ry1 - ry0;
+      // Table pixel of the region → image pixel.
+      const a = img.width / s.width;
+      const A = [a, 0, 0, 0, a, 0, 0, 0, 1];
+      const Ti = [1 / f, 0, x0 + rx0 / f, 0, 1 / f, y0 + ry0 / f, 0, 0, 1];
+      const src = cv.matFromImageData(img);
+      const dst = new cv.Mat();
+      const m = cv.matFromArray(3, 3, cv.CV_64F, mulH(A, mulH(h, Ti)));
+      cv.warpPerspective(
+        src,
+        dst,
+        m,
+        new cv.Size(rw, rh),
+        cv.INTER_LINEAR | cv.WARP_INVERSE_MAP,
+        cv.BORDER_CONSTANT,
+        new cv.Scalar(0, 0, 0, 0),
+      );
+      const d = dst.data;
+      for (let y = 0; y < rh; y++) {
+        const v = y0 + (ry0 + y + 0.5) / f;
+        for (let x = 0; x < rw; x++) {
+          const j = (y * rw + x) * 4;
+          if (!d[j + 3]) continue;
+          const q = quality(s, x0 + (rx0 + x + 0.5) / f, v);
+          const o = (ry0 + y) * mw + rx0 + x;
+          if (q <= best[o]) continue;
+          best[o] = q;
+          out[o * 4] = d[j];
+          out[o * 4 + 1] = d[j + 1];
+          out[o * 4 + 2] = d[j + 2];
+        }
+      }
+      for (const x of [src, dst, m]) x.delete();
+    }
+    // Grid corners from the photo that shows each best.
+    const corners = [];
+    for (let r = 0; r <= rows; r++)
+      for (let c = 0; c <= cols; c++) {
+        let bq = 0;
+        let pt = null;
+        for (const { s, M } of list) {
+          const q = quality(s, c * C, r * C);
+          if (q <= bq) continue;
+          bq = q;
+          pt = applyH(M, ...PH.board.toScene(s.board, c * C, r * C));
+        }
+        corners.push(pt);
+      }
+    const views = list.map(({ i, M }) => ({ scene: i, M }));
+    return { rgba: out, w: mw, h: mh, x0, y0, f, views, corners };
   }
 
-  PH.pipeline = { analyzeScene, solve, findDuplicates, straightView };
+  PH.pipeline = { analyzeScene, solve, boardState, findDuplicates, tableView };
 })();

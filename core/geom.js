@@ -44,6 +44,15 @@
     return [(H[0] * x + H[1] * y + H[2]) / w, (H[3] * x + H[4] * y + H[5]) / w];
   }
 
+  // Product A·B of two 3×3 matrices (B applied first).
+  function mulH(A, B) {
+    const out = [];
+    for (let r = 0; r < 3; r++)
+      for (let c = 0; c < 3; c++)
+        out.push(A[r * 3] * B[c] + A[r * 3 + 1] * B[3 + c] + A[r * 3 + 2] * B[6 + c]);
+    return out;
+  }
+
   function invertH(H) {
     const [a, b, c, d, e, f, g, h, i] = H;
     const A = e * i - f * h;
@@ -136,5 +145,16 @@
     return s / 2;
   }
 
-  PH.geom = { solve, homography, applyH, invertH, gridFor, borderCost, gridFromBorder, wrapDeg, polygonArea };
+  PH.geom = {
+    solve,
+    homography,
+    applyH,
+    mulH,
+    invertH,
+    gridFor,
+    borderCost,
+    gridFromBorder,
+    wrapDeg,
+    polygonArea,
+  };
 })();

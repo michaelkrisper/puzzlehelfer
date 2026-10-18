@@ -5,7 +5,7 @@ const REF_MAX = 2400;
 const SCENE_MAX = 4000;
 const COUNTS = [100, 200, 300, 500, 1000, 1500, 2000];
 // Same as VERSION in sw.js; bump both together.
-const APP_VERSION = 'v30';
+const APP_VERSION = 'v31';
 const ARROWS = 6;
 const $ = (id) => document.getElementById(id);
 
@@ -134,14 +134,23 @@ const state = {
   gridManual: false, // columns/rows set with −/+
   gridAuto: false, // grid already taken from a photo
   gridNote: '',
-  scenes: [], // {id, canvas, image, url, busy, straight}
+  scenes: [], // {id, canvas, image, url, busy}
   current: null,
   result: null,
   allArrows: false,
   edgeOnly: false,
-  straight: false, // photo seen from above (needs the puzzle in the photo)
-  // Pieces marked by the user, in order (for undo): {kind: 'placed' with
-  // cell, rot | 'removed' (no piece, or a wrong find), sceneId, index}.
+  // All photos with the puzzle as one picture from above, instead of one
+  // photo: {canvas, width, height, x0, y0, f, M (sceneId → matrix), corners}.
+  table: false,
+  tableChosen: false, // the user switched between table and single photo
+  tableImg: null,
+  // Part of the table that counts, [u0, v0, u1, v1] in reference pixels.
+  crop: null,
+  edit: false, // table view: drag the crop corners, tap places to toggle
+  dirty: false, // corrected while editing: search again when done
+  // Marks by the user, in order (for undo): {kind: 'placed' with cell, rot |
+  // 'removed' (no piece, or a wrong find), sceneId, index} or {kind: 'cell',
+  // cell, free} (a place the recognition got wrong).
   marks: [],
   // Step by step: the piece shown and the chosen candidate place; skipped
   // pieces move to the end of the queue.
@@ -527,9 +536,10 @@ for (const input of document.querySelectorAll('input[data-scene]')) {
   input.addEventListener('change', async () => {
     const files = [...input.files];
     input.value = '';
-    for (const f of files) {
+    // Several photos: one search for places at the end.
+    for (const [i, f] of files.entries()) {
       try {
-        await addScene(f);
+        await addScene(f, i === files.length - 1);
       } catch (err) {
         console.error(err);
         setStatus(`${f.name}: ${err.message}`);
@@ -538,18 +548,18 @@ for (const input of document.querySelectorAll('input[data-scene]')) {
   });
 }
 
-async function addScene(file) {
+async function addScene(file, thenSolve = true) {
   const { canvas, image } = await decode(file, SCENE_MAX);
   const s = { id: sceneSeq++, canvas, image, url: URL.createObjectURL(file), busy: true };
   state.scenes.push(s);
   state.current = s.id;
   renderThumbs();
-  await analyze(s, true);
+  await analyze(s, thenSolve);
 }
 
 async function analyze(s, thenSolve) {
   setStatus('Teile werden gesucht …');
-  s.straight = null;
+  state.tableImg = null;
   let r = null;
   try {
     r = await call('scene', { sceneId: s.id, image: s.image });
@@ -634,6 +644,9 @@ function renderThumbs() {
     b.append(x);
     b.addEventListener('click', () => {
       state.current = s.id;
+      state.table = false;
+      state.tableChosen = true;
+      state.edit = false;
       renderThumbs();
       renderResult();
     });
@@ -646,6 +659,7 @@ async function removeScene(id) {
   URL.revokeObjectURL(s.url);
   state.scenes = state.scenes.filter((x) => x.id !== id);
   state.marks = state.marks.filter((p) => p.sceneId !== id);
+  state.tableImg = null;
   await call('removeScene', { sceneId: id });
   if (state.current === id) state.current = state.scenes.at(-1)?.id ?? null;
   renderThumbs();
@@ -708,35 +722,48 @@ $('new-round').addEventListener('click', async () => {
   state.scenes = [];
   state.current = null;
   state.result = null;
+  state.tableImg = null;
+  state.crop = null;
+  state.edit = false;
   await call('clearScenes');
   renderThumbs();
   show('result', false);
   setStatus('Setze die vorgeschlagenen Teile ein und fotografiere Puzzle und restliche Teile erneut.');
 });
 
-// Photo of part of the puzzle, taken from the side: show it from above, the
-// puzzle upright as in the reference.
-$('straight').addEventListener('click', async () => {
-  const cur = currentScene();
-  if (!cur) return;
-  state.straight = !state.straight;
-  if (state.straight && !cur.s.straight) {
-    setStatus('Foto wird begradigt …');
-    try {
-      const r = await call('straighten', { sceneId: cur.s.id, image: cur.s.image });
-      const c = document.createElement('canvas');
-      c.width = r.w;
-      c.height = r.h;
-      c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(r.rgba), r.w, r.h), 0, 0);
-      cur.s.straight = { canvas: c, width: r.w, height: r.h, M: r.M, Mi: invertH(r.M) };
-      setStatus('');
-    } catch (err) {
-      state.straight = false;
-      setStatus(`Begradigen ging nicht: ${err.message}`);
-    }
-  }
+// All photos with the finished part as one picture of the table from above,
+// the puzzle upright as in the reference.
+async function tableImage() {
+  if (state.tableImg) return state.tableImg;
+  setStatus('Fotos werden zusammengesetzt …');
+  const r = await call('table');
+  const c = document.createElement('canvas');
+  c.width = r.w;
+  c.height = r.h;
+  c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(r.rgba), r.w, r.h), 0, 0);
+  const M = new Map(r.views.map((v) => [v.sceneId, { M: v.M, Mi: invertH(v.M) }]));
+  state.tableImg = { canvas: c, width: r.w, height: r.h, x0: r.x0, y0: r.y0, f: r.f, M, corners: r.corners };
+  setStatus('');
+  return state.tableImg;
+}
+
+$('table').addEventListener('click', () => {
+  state.table = !state.table;
+  state.tableChosen = true;
+  state.edit = false;
   view.scene = null;
   renderResult();
+});
+
+// Correct the table: crop corners and places, then search again.
+$('table-edit').addEventListener('click', async () => {
+  state.edit = !state.edit;
+  view.scene = null;
+  renderResult();
+  if (!state.edit && state.dirty) {
+    state.dirty = false;
+    await solve();
+  }
 });
 
 function setStatus(t) {
@@ -748,6 +775,8 @@ async function solve() {
   const r = await call('solve', {
     placed: state.marks.filter((m) => m.kind === 'placed'),
     removed: state.marks.filter((m) => m.kind === 'removed'),
+    cells: state.marks.filter((m) => m.kind === 'cell').map(({ cell, free }) => ({ cell, free })),
+    crop: state.crop,
   });
   // Pieces put in are hidden; the next arrows move up.
   r.suggestions = r.suggestions.filter((s) => !s.placed);
@@ -971,14 +1000,29 @@ function currentScene() {
   return s && info ? { s, info } : null;
 }
 
-// What the viewer shows: the photo, or the photo from above with M mapping
-// recognition coordinates (working image) into it.
+// What the viewer shows: the photo, or the table from above. full: size the
+// whole picture is drawn at; the part shown starts at ox, oy (crop).
 function viewImage(cur) {
-  const st = state.straight && cur.info.board ? cur.s.straight : null;
-  return st ?? { canvas: cur.s.canvas, width: cur.info.width, height: cur.info.height, M: null, Mi: null };
+  const t = state.table ? state.tableImg : null;
+  if (!t) {
+    const { width, height } = cur.info;
+    return { canvas: cur.s.canvas, full: [width, height], width, height, ox: 0, oy: 0 };
+  }
+  const c = !state.edit && cropRect(t);
+  const [x0, y0, x1, y1] = c || [0, 0, t.width, t.height];
+  return { canvas: t.canvas, full: [t.width, t.height], width: x1 - x0, height: y1 - y0, ox: x0, oy: y0 };
 }
 
-// Straightened view: recognition coordinates → view (null: the photo itself).
+// The crop in table pixels, inside the picture.
+function cropRect(t) {
+  const c = state.crop;
+  if (!c) return null;
+  const X = (u) => Math.max(0, Math.min(t.width, (u - t.x0) * t.f));
+  const Y = (v) => Math.max(0, Math.min(t.height, (v - t.y0) * t.f));
+  return [X(c[0]), Y(c[1]), X(c[2]), Y(c[3])];
+}
+
+// Recognition coordinates of the scene drawn → view (null: the photo itself).
 let viewH = null;
 const vp = (p) => (viewH ? applyH(viewH, p[0], p[1]) : p);
 
@@ -986,18 +1030,41 @@ function renderResult() {
   const cur = currentScene();
   if (!cur) return;
   const cv = $('viewer');
-  $('straight').hidden = !cur.info.board;
-  $('straight').textContent = state.straight ? 'Foto wie aufgenommen' : 'Von oben (begradigt)';
+  // Several photos with the puzzle: the table from above unless the user
+  // chose otherwise.
+  const boards = state.result.scenes.filter((x) => x.board).length;
+  if (!state.tableChosen && boards >= 2) state.table = true;
+  if (!boards) state.table = false;
+  if (state.table && !state.tableImg) {
+    tableImage()
+      .then(() => {
+        view.scene = null;
+        renderResult();
+      })
+      .catch((err) => {
+        state.table = false;
+        state.tableChosen = true;
+        setStatus(`Zusammensetzen ging nicht: ${err.message}`);
+      });
+  }
+  const table = state.table && !!state.tableImg;
+  $('table').hidden = !boards;
+  $('table').textContent = state.table ? 'Einzelnes Foto' : 'Tisch von oben';
+  $('table-edit').hidden = !table;
+  $('table-edit').textContent = state.edit ? 'Fertig' : 'Korrigieren';
+  show('edit-hint', table && state.edit);
   // Recognition coordinates refer to the possibly downscaled working image.
   const { width: w, height: h } = viewImage(cur);
   view.cssW = cv.parentElement.clientWidth;
   view.cssH = Math.min(window.innerHeight * 0.7, (view.cssW * h) / w);
-  if (view.scene !== cur.s.id) {
+  touchMode();
+  const key = table ? `table${state.edit ? '-edit' : ''}` : cur.s.id;
+  if (view.scene !== key) {
     view.fit = Math.min(view.cssW / w, view.cssH / h);
     view.s = view.fit;
     view.tx = (view.cssW - w * view.s) / 2;
     view.ty = (view.cssH - h * view.s) / 2;
-    view.scene = cur.s.id;
+    view.scene = key;
   }
   drawViewer();
   drawMap();
@@ -1014,24 +1081,118 @@ function drawViewer() {
   g.translate(view.tx, view.ty);
   g.scale(view.s, view.s);
   const im = viewImage(cur);
-  g.drawImage(im.canvas, 0, 0, im.width, im.height);
-  viewH = im.M;
+  g.beginPath();
+  g.rect(0, 0, im.width, im.height);
+  g.clip();
+  g.translate(-im.ox, -im.oy);
+  g.drawImage(im.canvas, 0, 0, ...im.full);
   try {
-    drawOverlay(g, cur);
+    if (state.table && state.tableImg) drawTable(g, state.tableImg);
+    else drawOverlay(g, cur);
   } finally {
     viewH = null;
     g.restore();
   }
 }
 
-function drawOverlay(g, cur) {
+// Places shown as free: the search result with the user's corrections since.
+function freeCells() {
+  const free = new Set(state.result.free ?? []);
+  for (const m of state.marks) {
+    if (m.kind === 'cell' && m.free) free.add(m.cell);
+    else if (m.kind === 'cell' || m.kind === 'placed') free.delete(m.cell);
+  }
+  return free;
+}
+
+// Places of the finished part, with the user's corrections and pieces put in.
+function filledCells() {
+  const filled = new Set(state.result.scenes.flatMap((s) => s.board?.filled ?? []));
+  for (const m of state.marks) {
+    if (m.kind === 'cell' && m.free) filled.delete(m.cell);
+    else if (m.kind === 'cell' || m.kind === 'placed') filled.add(m.cell);
+  }
+  return filled;
+}
+
+// Corners of a place in table pixels, null where no photo shows it.
+function cellQuad(t, cell) {
+  const n = state.cols + 1;
+  const r = Math.floor(cell / state.cols);
+  const c = cell % state.cols;
+  const q = [
+    t.corners[r * n + c],
+    t.corners[r * n + c + 1],
+    t.corners[(r + 1) * n + c + 1],
+    t.corners[(r + 1) * n + c],
+  ];
+  return q.every(Boolean) ? q : null;
+}
+
+function drawTable(g, t) {
+  const px = 1 / view.s;
+  // Free places: thin frames; while correcting, filled blue.
+  g.strokeStyle = '#4fb3ffcc';
+  g.fillStyle = '#4fb3ff55';
+  g.lineWidth = (state.edit ? 2 : 1.5) * px;
+  for (const cell of freeCells()) {
+    const q = cellQuad(t, cell);
+    if (!q) continue;
+    poly(g, q);
+    if (state.edit) g.fill();
+    g.stroke();
+  }
+  for (const info of state.result.scenes) {
+    const m = t.M.get(info.id);
+    if (!m) continue;
+    viewH = m.M;
+    drawOverlay(g, { s: { id: info.id }, info }, true);
+  }
+  viewH = null;
+  if (state.edit) drawCropFrame(g, t, px);
+}
+
+// Crop while correcting: outside dimmed, corners to drag.
+function drawCropFrame(g, t, px) {
+  const [x0, y0, x1, y1] = cropRect(t) ?? [0, 0, t.width, t.height];
+  g.fillStyle = '#000b';
+  g.fillRect(0, 0, t.width, y0);
+  g.fillRect(0, y1, t.width, t.height - y1);
+  g.fillRect(0, y0, x0, y1 - y0);
+  g.fillRect(x1, y0, t.width - x1, y1 - y0);
+  g.strokeStyle = '#fff';
+  g.lineWidth = 2 * px;
+  g.strokeRect(x0, y0, x1 - x0, y1 - y0);
+  for (const [x, y] of cropCorners(t)) {
+    g.beginPath();
+    g.arc(x, y, 12 * px, 0, Math.PI * 2);
+    g.fillStyle = '#4fb3ff';
+    g.fill();
+    g.strokeStyle = '#000';
+    g.stroke();
+  }
+}
+
+function cropCorners(t) {
+  const [x0, y0, x1, y1] = cropRect(t) ?? [0, 0, t.width, t.height];
+  return [
+    [x0, y0],
+    [x1, y0],
+    [x1, y1],
+    [x0, y1],
+  ];
+}
+
+// table: drawn into the table view (duplicates on a second photo left out,
+// the frame comes from the places).
+function drawOverlay(g, cur, table = false) {
   const px = 1 / view.s; // one screen unit in image pixels
   const sugg = state.result.suggestions.filter(
-    (x) => x.sceneId === cur.s.id && (!state.edgeOnly || onEdge(x)),
+    (x) => x.sceneId === cur.s.id && (!state.edgeOnly || onEdge(x)) && !(table && x.sameAs),
   );
 
   if (!state.edgeOnly) drawUnclearAndGroups(g, cur.info, px);
-  if (cur.info.board) drawFilled(g, cur.info.board, px);
+  if (cur.info.board && !table) drawFilled(g, cur.info.board, px);
   for (const x of sugg) {
     const p = cur.info.pieces[x.index];
     const col = x.cell === null ? COLORS.bad : COLORS[x.level];
@@ -1040,17 +1201,22 @@ function drawOverlay(g, cur) {
     g.lineWidth = 2 * px;
     g.stroke();
   }
+  if (table && state.edit) return;
   const f = !state.allArrows && focused();
-  if (f && f.sceneId === cur.s.id) {
-    drawFocus(g, cur.info, f, px);
+  if (f && (f.sceneId === cur.s.id || table)) {
+    if (f.sceneId === cur.s.id) drawFocus(g, cur.info, f, px);
     return;
   }
+  drawArrows(g, sugg, cur.info.board, px);
+}
+
+function drawArrows(g, sugg, board, px) {
   for (const x of sugg) {
     if (x.cell === null || x.level === 'bad' || !x.target) continue;
     // Many arrows cross: by default only the next steps.
     if (!state.allArrows && x.label > ARROWS && x !== state.selected) continue;
     arrow(g, x.center, x.target, COLORS[x.level], px);
-    targetMarker(g, x, cur.info.board, px);
+    targetMarker(g, x, board, px);
   }
   for (const x of sugg) {
     if (x.cell === null) continue;
@@ -1255,10 +1421,7 @@ function drawMap() {
   const k = cssW / W;
   const g = sizeCanvas(cv, cssW, H * k, Math.min(4, view.width / cssW));
   g.drawImage(view, 0, 0, W * k, H * k);
-  const filled = new Set([
-    ...state.result.scenes.flatMap((s) => s.board?.filled ?? []),
-    ...state.marks.filter((m) => m.kind === 'placed').map((m) => m.cell),
-  ]);
+  const filled = filledCells();
   if (filled.size) {
     g.fillStyle = '#000a';
     for (let cell = 0; cell < state.cols * state.rows; cell++) {
@@ -1323,7 +1486,7 @@ let lastTap = 0;
 vc.addEventListener('pointerdown', (e) => {
   vc.setPointerCapture(e.pointerId);
   view.pointers.set(e.pointerId, [e.clientX, e.clientY]);
-  gesture = { moved: false, start: snapshot() };
+  gesture = { moved: false, start: snapshot(), corner: view.pointers.size === 1 ? cropCornerAt(e) : -1 };
 });
 vc.addEventListener('pointermove', (e) => {
   if (!view.pointers.has(e.pointerId) || !gesture) return;
@@ -1332,8 +1495,12 @@ vc.addEventListener('pointermove', (e) => {
   const now = snapshot();
   if (Math.hypot(now.cx - gesture.start.cx, now.cy - gesture.start.cy) > 6 || now.n > 1) gesture.moved = true;
   if (!gesture.moved || prev.n !== now.n) return;
-  if (now.n === 1 && view.s <= view.fit * 1.01) return;
   const r = vc.getBoundingClientRect();
+  if (gesture.corner >= 0 && now.n === 1) {
+    dragCorner(gesture.corner, now.cx - r.left, now.cy - r.top);
+    return;
+  }
+  if (now.n === 1 && view.s <= view.fit * 1.01) return;
   const k = now.n > 1 && prev.d > 0 ? now.d / prev.d : 1;
   zoomAt(prev.cx - r.left, prev.cy - r.top, k);
   view.tx += now.cx - prev.cx;
@@ -1344,7 +1511,7 @@ vc.addEventListener('pointermove', (e) => {
 const up = (e) => {
   view.pointers.delete(e.pointerId);
   if (!gesture) return;
-  if (!gesture.moved && view.pointers.size === 0) {
+  if (!gesture.moved && view.pointers.size === 0 && gesture.corner < 0) {
     const t = performance.now();
     const r = vc.getBoundingClientRect();
     const sx = e.clientX - r.left;
@@ -1361,8 +1528,42 @@ const up = (e) => {
   }
   if (view.pointers.size === 0) gesture = null;
   else gesture.start = snapshot();
-  vc.style.touchAction = view.s > view.fit * 1.01 ? 'none' : 'pan-y';
+  touchMode();
 };
+
+// Zoomed in or correcting, one finger moves the picture or a corner instead
+// of scrolling the page.
+function touchMode() {
+  vc.style.touchAction = state.edit || view.s > view.fit * 1.01 ? 'none' : 'pan-y';
+}
+
+// Crop corner under the pointer (table view, correcting), else −1.
+function cropCornerAt(e) {
+  const t = state.tableImg;
+  if (!state.edit || !state.table || !t) return -1;
+  const r = vc.getBoundingClientRect();
+  return cropCorners(t).findIndex(
+    ([x, y]) =>
+      Math.hypot(view.tx + x * view.s - (e.clientX - r.left), view.ty + y * view.s - (e.clientY - r.top)) <
+      28,
+  );
+}
+
+function dragCorner(i, sx, sy) {
+  const t = state.tableImg;
+  const X = Math.max(0, Math.min(t.width, (sx - view.tx) / view.s));
+  const Y = Math.max(0, Math.min(t.height, (sy - view.ty) / view.s));
+  let [x0, y0, x1, y1] = cropRect(t) ?? [0, 0, t.width, t.height];
+  // At least two places wide and high.
+  const m = 2 * state.refView.C * t.f;
+  if (i === 0 || i === 3) x0 = Math.min(X, x1 - m);
+  else x1 = Math.max(X, x0 + m);
+  if (i < 2) y0 = Math.min(Y, y1 - m);
+  else y1 = Math.max(Y, y0 + m);
+  state.crop = [x0 / t.f + t.x0, y0 / t.f + t.y0, x1 / t.f + t.x0, y1 / t.f + t.y0];
+  state.dirty = true;
+  drawViewer();
+}
 vc.addEventListener('pointerup', up);
 vc.addEventListener('pointercancel', up);
 vc.addEventListener(
@@ -1429,16 +1630,38 @@ function inside(pts, x, y) {
 function tapAt(sx, sy) {
   const cur = currentScene();
   if (!cur) return;
-  const { Mi } = viewImage(cur);
-  const v = [(sx - view.tx) / view.s, (sy - view.ty) / view.s];
-  const [x, y] = Mi ? applyH(Mi, v[0], v[1]) : v;
-  const hit = state.result.suggestions.find(
-    (u) => u.sceneId === cur.s.id && inside(cur.info.pieces[u.index].outline, x, y),
-  );
-  if (hit && hit.cell !== null) {
-    state.focus = { sceneId: hit.sceneId, index: hit.index, alt: 0 };
-    renderSteps();
-  } else if (hit) openDetail(hit, cur.info);
+  const im = viewImage(cur);
+  const v = [(sx - view.tx) / view.s + im.ox, (sy - view.ty) / view.s + im.oy];
+  const t = state.table ? state.tableImg : null;
+  // In the table view each photo has its own mapping; duplicates are hidden.
+  const where = t
+    ? state.result.scenes.filter((i) => t.M.has(i.id)).map((i) => [i, applyH(t.M.get(i.id).Mi, ...v)])
+    : [[cur.info, v]];
+  for (const [info, [x, y]] of where) {
+    const hit = state.result.suggestions.find(
+      (u) => u.sceneId === info.id && !(t && u.sameAs) && inside(info.pieces[u.index].outline, x, y),
+    );
+    if (!hit) continue;
+    if (hit.cell !== null && !state.edit) {
+      state.focus = { sceneId: hit.sceneId, index: hit.index, alt: 0 };
+      renderSteps();
+    } else openDetail(hit, info);
+    return;
+  }
+  if (t && state.edit) toggleCell(t, v);
+}
+
+// A place the recognition got wrong: free ↔ filled.
+function toggleCell(t, v) {
+  for (let cell = 0; cell < state.cols * state.rows; cell++) {
+    const q = cellQuad(t, cell);
+    if (!q || !inside(q, v[0], v[1])) continue;
+    state.marks.push({ kind: 'cell', cell, free: !freeCells().has(cell) });
+    state.dirty = true;
+    $('undo-placed').hidden = false;
+    drawViewer();
+    return;
+  }
 }
 
 // ---------- Details ----------
