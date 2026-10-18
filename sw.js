@@ -1,7 +1,7 @@
 // Precache everything; after that the app needs no network.
 // Bump VERSION whenever any of these files changes, together with
 // APP_VERSION in app.js (shown in the header).
-const VERSION = 'v31';
+const VERSION = 'v32';
 const FILES = [
   './',
   'index.html',
@@ -13,6 +13,7 @@ const FILES = [
   'core/segment.js',
   'core/reference.js',
   'core/match.js',
+  'core/fit.js',
   'core/board.js',
   'core/knn.js',
   'core/gpu.js',

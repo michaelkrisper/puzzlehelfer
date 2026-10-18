@@ -326,6 +326,28 @@
     contours.delete();
     hier.delete();
     const corner = (r, c) => toPlane(board, ...toScene(board, c * C, r * C));
+    // The sharpest turn (over 50°) within 15 % of a side around index i: the
+    // corner of the gap at the seam. Otherwise i (the outline runs straight
+    // on along the next piece).
+    const turnNear = (pts, i, L) => {
+      const n = pts.length;
+      const w = Math.max(2, Math.round(0.08 * L));
+      let best = i;
+      let bestA = (50 * Math.PI) / 180;
+      for (let j = -Math.round(0.15 * L); j <= Math.round(0.15 * L); j++) {
+        const p = pts[(i + j + n) % n];
+        const q0 = pts[(i + j - w + n) % n];
+        const q1 = pts[(i + j + w + n) % n];
+        const t0 = Math.atan2(p[1] - q0[1], p[0] - q0[0]);
+        const t1 = Math.atan2(q1[1] - p[1], q1[0] - p[0]);
+        const turn = Math.abs(Math.atan2(Math.sin(t1 - t0), Math.cos(t1 - t0)));
+        if (turn > bestA) {
+          bestA = turn;
+          best = (i + j + n) % n;
+        }
+      }
+      return best;
+    };
     const nearest = (q, maxD) => {
       let best = null;
       for (let li = 0; li < lines.length; li++) {
@@ -338,6 +360,31 @@
       return best;
     };
     return {
+      // Rim of the gap along side d of the empty cell r/c: the outline of
+      // the finished part from corner to corner (where it turns at the seam,
+      // the grid may be a little off), in reference pixels every half pixel.
+      rim(r, c, d) {
+        const cs = [corner(r, c), corner(r, c + 1), corner(r + 1, c + 1), corner(r + 1, c)];
+        const a = cs[d];
+        const b = cs[(d + 1) % 4];
+        const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        const na = nearest(a, 0.2 * L);
+        const nb = nearest(b, 0.2 * L);
+        if (!na || !nb || na.li !== nb.li) return null;
+        const pts = lines[na.li];
+        const n = pts.length;
+        const ia = turnNear(pts, na.i, L);
+        const ib = turnNear(pts, nb.i, L);
+        const len = (ib - ia + n) % n;
+        if (len < 0.5 * L || len > 3 * L) return null;
+        const step = Math.max(1, Math.round(0.5 * board.k));
+        const out = [];
+        for (let j = 0; j <= len; j += step) {
+          const [x, y] = pts[(ia + j) % n];
+          out.push(x / board.k, y / board.k);
+        }
+        return Float32Array.from(out);
+      },
       // Side d (top, right, bottom, left) of the empty cell r/c.
       side(r, c, d) {
         const cs = [corner(r, c), corner(r, c + 1), corner(r + 1, c + 1), corner(r + 1, c)];
@@ -430,6 +477,8 @@
     hit.k = sides[sides.length >> 1];
     hit.Hi = PH.geom.invertH(H);
     const outlines = boardOutlines(cv, bigMask, hit, C);
+    // Gap outlines of the empty places next to the finished part.
+    const gaps = new Map();
     const a = 0.3 * C;
     const b = 0.7 * C;
     const d0 = 0.04 * C;
@@ -437,6 +486,21 @@
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         if (isFilled[r * cols + c] || isUnseen[r * cols + c]) continue;
+        const next = PH.match.DIRS.some(([dx, dy]) => {
+          const nr = r + dy;
+          const nc = c + dx;
+          return nr >= 0 && nc >= 0 && nr < rows && nc < cols && isFilled[nr * cols + nc];
+        });
+        if (next)
+          gaps.set(
+            r * cols + c,
+            PH.match.DIRS.map(([dx, dy], d) => {
+              const nr = r + dy;
+              const nc = c + dx;
+              const f = nr >= 0 && nc >= 0 && nr < rows && nc < cols && isFilled[nr * cols + nc];
+              return f ? outlines.rim(r, c, d) : null;
+            }),
+          );
         for (let d = 0; d < 4; d++) {
           const [dx, dy] = PH.match.DIRS[d];
           const nr = r + dy;
@@ -496,6 +560,7 @@
       filled,
       unseen,
       holes,
+      gaps: [...gaps],
       color: fitColor(pairs),
     };
   }

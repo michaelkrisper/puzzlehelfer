@@ -7,6 +7,7 @@ importScripts(
   'core/segment.js',
   'core/reference.js',
   'core/match.js',
+  'core/fit.js',
   'core/board.js',
   'core/knn.js',
   'core/gpu.js',

@@ -98,6 +98,24 @@
     return ((best + 1) / bins) * maxV;
   }
 
+  // Distance of every pixel to the table colours (model of
+  // backgroundDistance), in standard deviations.
+  function tableDistance(lab, n, model) {
+    const dist = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      let best = Infinity;
+      for (const m of model) {
+        const dl = (lab[i * 3] - m.mean[0]) * m.inv[0];
+        const da = (lab[i * 3 + 1] - m.mean[1]) * m.inv[1];
+        const db = (lab[i * 3 + 2] - m.mean[2]) * m.inv[2];
+        const d = dl * dl + da * da + db * db;
+        if (d < best) best = d;
+      }
+      dist[i] = Math.sqrt(best);
+    }
+    return dist;
+  }
+
   // Distance of every pixel to the table model, in standard deviations.
   // Lightness counts half so that cast shadows of pieces do not count as
   // pieces.
@@ -168,20 +186,15 @@
       ],
     }));
     const n = w * h;
-    const dist = new Float32Array(n);
+    const dist = tableDistance(lab, n, model);
     // Second distance for the dark rims of the pieces: darker than the table,
     // compared with the table colour in shadow, whose chroma falls with the
     // lightness. Only used right at the outline (brown fur has the same hue).
     const shade = new Float32Array(n);
     for (let i = 0; i < n; i++) {
-      let best = Infinity;
       let bestS = Infinity;
       for (const m of model) {
         const dl = (lab[i * 3] - m.mean[0]) * m.inv[0];
-        const da = lab[i * 3 + 1] - m.mean[1];
-        const db = lab[i * 3 + 2] - m.mean[2];
-        const d = dl * dl + (da * m.inv[1]) ** 2 + (db * m.inv[2]) ** 2;
-        if (d < best) best = d;
         const f = dl < 0 ? Math.max(0, lab[i * 3] / m.mean[0]) : 1;
         const ds =
           dl * dl +
@@ -189,7 +202,6 @@
           ((lab[i * 3 + 2] - f * m.mean[2]) * m.inv[2]) ** 2;
         if (ds < bestS) bestS = ds;
       }
-      dist[i] = Math.sqrt(best);
       shade[i] = Math.sqrt(bestS);
     }
     // Noise of the table itself: distances of the border samples whose
@@ -646,7 +658,7 @@
   function segmentScene(cv, img, lab, opts = {}) {
     const { width: w, height: h } = img;
     const sd = localStd(cv, img);
-    const { dist, shade, noise } = backgroundDistance(lab, w, h, sd);
+    const { dist, shade, noise, model } = backgroundDistance(lab, w, h, sd);
     const sample = [];
     for (let i = 0; i < dist.length; i += 7) sample.push(Math.min(dist[i], 30));
     // Spread of the table itself at the image border: grain and noise must not
@@ -826,8 +838,17 @@
     k7.delete();
     contours.delete();
     hier.delete();
-    return { pieces, big, mask, bigMask, pieceArea, threshold: thr };
+    return { pieces, big, mask, bigMask, pieceArea, threshold: thr, model, low: tLow };
   }
 
-  PH.segment = { rgbaToLab, segmentScene, splitBlob, backgroundDistance, kmeans, otsu, drawPoly };
+  PH.segment = {
+    rgbaToLab,
+    segmentScene,
+    splitBlob,
+    backgroundDistance,
+    tableDistance,
+    kmeans,
+    otsu,
+    drawPoly,
+  };
 })();

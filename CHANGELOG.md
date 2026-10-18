@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Plain pieces at the end are placed by their whole outline: each piece is
+  laid into each gap of the finished part (turn and shift searched) and
+  every point of the gap's rim must lie on the piece's outline. Corners and
+  side profiles of the same piece on two photos differed as much as two
+  different sky pieces; with the outline the same piece gets the same best
+  place on 18 of 21 double photos instead of 3. Five sky photos: 5 pieces
+  above 50 % instead of none above 20 %.
+- Piece outlines are traced again at the photo's full resolution (about
+  125 instead of 90 px per piece on the sky photos), the edge halfway
+  between table and piece.
+- Gap rims follow the outline of the finished part from corner to corner
+  (where it turns at the seam), not a band along the grid, which picked up
+  the neighbouring places' rims where the grid sits a little off.
 - Pieces are numbered by probability (1 = likeliest) instead of green,
   yellow and red; the step card and the piece list show the percentage,
   grey means no place.

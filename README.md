@@ -98,6 +98,14 @@ flowchart LR
   candidates. Brightness and colour are fitted per candidate, which makes the
   comparison robust against reflections and colour cast of the reference.
   Rectangular pieces only fit with the long side along the long cell side.
+- **Outline fit** ([`core/fit.js`](core/fit.js)): at the edge of a finished
+  part each piece is laid into each gap whose knobs and holes it matches,
+  on the table seen from above: the start comes from the corners, then turn
+  and shift are fitted so that the gap's rim (the finished part's outline
+  from corner to corner) lies on the piece's outline. The mean distance
+  decides among plain pieces, where colour says little and the corners of
+  one piece vary by 5 % from photo to photo. Piece outlines are traced again
+  at the photo's full resolution for this.
 - **Assignment:** always the surest piece first. Its knobs and holes become
   constraints for the neighbouring places, just like solving by hand. In the
   middle of nowhere a suggestion needs more certainty than at the edge or

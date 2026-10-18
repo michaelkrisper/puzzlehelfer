@@ -26,6 +26,104 @@
     return out;
   }
 
+  // The outline again at the full resolution of the photo (the working image
+  // has about 90 px per piece, the photo often twice that), only near the
+  // coarse outline: no merging with neighbours, and print as dark as the
+  // table inside the piece stays piece. The edge lies halfway between table
+  // and the piece just inside it: a fixed low threshold puts it further out
+  // the more blurred the edge, and pieces must fit gaps measured the same
+  // way. Returns the outline in working pixels or null.
+  function fineOutline(cv, input, scale, contour, seg) {
+    if (scale > 0.8 || !seg.model) return null;
+    const f = 1 / scale;
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const [x, y] of contour) {
+      x0 = Math.min(x0, x);
+      y0 = Math.min(y0, y);
+      x1 = Math.max(x1, x);
+      y1 = Math.max(y1, y);
+    }
+    const X0 = Math.max(0, Math.floor((x0 - 4) * f));
+    const Y0 = Math.max(0, Math.floor((y0 - 4) * f));
+    const X1 = Math.min(input.width, Math.ceil((x1 + 5) * f));
+    const Y1 = Math.min(input.height, Math.ceil((y1 + 5) * f));
+    const rw = X1 - X0;
+    const rh = Y1 - Y0;
+    const rgba = new Uint8ClampedArray(rw * rh * 4);
+    for (let y = 0; y < rh; y++)
+      rgba.set(
+        input.data.subarray(((Y0 + y) * input.width + X0) * 4, ((Y0 + y) * input.width + X1) * 4),
+        y * rw * 4,
+      );
+    const dist = PH.segment.tableDistance(PH.segment.rgbaToLab(rgba, rw * rh), rw * rh, seg.model);
+    const dm = cv.matFromArray(rh, rw, cv.CV_32FC1, dist);
+    cv.GaussianBlur(dm, dm, new cv.Size(5, 5), 1);
+    const coarse = cv.Mat.zeros(rh, rw, cv.CV_8UC1);
+    PH.segment.drawPoly(
+      cv,
+      coarse,
+      contour.map(([x, y]) => [Math.round((x + 0.5) * f - 0.5 - X0), Math.round((y + 0.5) * f - 0.5 - Y0)]),
+    );
+    // Band of ±2 working pixels around the coarse outline.
+    const r = Math.max(2, Math.round(2 * f));
+    const kr = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(2 * r + 1, 2 * r + 1));
+    const outer = new cv.Mat();
+    const inner = new cv.Mat();
+    const deep = new cv.Mat();
+    cv.dilate(coarse, outer, kr);
+    cv.erode(coarse, inner, kr);
+    cv.erode(inner, deep, kr);
+    const d = dm.data32F;
+    const od = outer.data;
+    const id = inner.data;
+    const dd = deep.data;
+    // Levels of table (outside the band) and piece rim (just inside it).
+    const out = [];
+    const rim = [];
+    for (let i = 0; i < d.length; i++) {
+      if (!od[i]) out.push(d[i]);
+      else if (id[i] && !dd[i]) rim.push(d[i]);
+    }
+    const med = (a) => {
+      a.sort((p, q) => p - q);
+      return a[a.length >> 1];
+    };
+    if (out.length < 20 || rim.length < 20) {
+      for (const m of [dm, coarse, kr, outer, inner, deep]) m.delete();
+      return null;
+    }
+    const level = Math.max(seg.low, (med(out) + med(rim)) / 2);
+    const mask = cv.Mat.zeros(rh, rw, cv.CV_8UC1);
+    const md = mask.data;
+    for (let i = 0; i < d.length; i++) if (id[i] || (od[i] && d[i] > level)) md[i] = 255;
+    const k3 = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
+    cv.morphologyEx(mask, mask, cv.MORPH_OPEN, k3);
+    cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, k3);
+    const contours = new cv.MatVector();
+    const hier = new cv.Mat();
+    cv.findContours(mask, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
+    let best = null;
+    let area = 0;
+    for (let i = 0; i < contours.size(); i++) {
+      const c = contours.get(i);
+      const a = cv.contourArea(c);
+      if (a > area) {
+        area = a;
+        best = [];
+        for (let j = 0; j < c.data32S.length; j += 2)
+          best.push([(c.data32S[j] + X0 + 0.5) * scale - 0.5, (c.data32S[j + 1] + Y0 + 0.5) * scale - 0.5]);
+      }
+      c.delete();
+    }
+    const coarseArea = cv.countNonZero(coarse);
+    for (const m of [dm, coarse, kr, outer, inner, deep, mask, k3, contours, hier]) m.delete();
+    if (!best || area < 0.75 * coarseArea || area > 1.25 * coarseArea) return null;
+    return best;
+  }
+
   // All pixel sizes of the recognition (smoothing, noise, thresholds) are
   // tuned to pieces of about 90 px side length. A coarse pre-pass measures
   // the piece size, then the photo is scaled down to fit, never up.
@@ -399,7 +497,17 @@
       }
       const raw = PH.match.extractPatch(cv, src, mask, shape.corners, ref.C, ref.G);
       if (p.own) PH.segment.drawPoly(cv, own, contour, 0);
-      pieces.push({ shape, raw, outline, split: !!p.own });
+      // Outline on the table seen from above, in reference pixels, at the
+      // photo's full resolution: laid into the gaps of the finished part.
+      let plane = null;
+      if (board) {
+        const fine = fineOutline(cv, input, scale, contour, seg) ?? contour;
+        plane = PH.piece.arcResample(
+          fine.map(([x, y]) => PH.geom.applyH(board.Hi, x, y)),
+          0.5,
+        );
+      }
+      pieces.push({ shape, raw, outline, split: !!p.own, plane });
     }
     if (sf && pieces.length) {
       progress('Merkmalspunkte werden verglichen …');
@@ -509,6 +617,67 @@
     return !((s[0].type === 0 && s[2].type === 0) || (s[1].type === 0 && s[3].type === 0));
   }
 
+  // Outline fit (core/fit.js) of a piece against every gap rim it may go
+  // into: "cell,rot" → mean rim distance in places. Kept on the piece and on
+  // the rim, so later searches (after "Eingesetzt") reuse them.
+  function outlineFits(it, rims, fits, ref) {
+    const p = it.piece;
+    if (!p.plane || !it.planeCorners) return null;
+    p.fitPrep ??= PH.fit.preparePiece(p.plane, it.planeCorners, ref.C);
+    p.fitDone ??= new WeakMap();
+    const out = new Map();
+    for (const [cell, G] of rims) {
+      let done = p.fitDone.get(G);
+      if (!done) {
+        done = [];
+        p.fitDone.set(G, done);
+      }
+      for (let rot = 0; rot < 4; rot++) {
+        if (fits && !fits(cell, rot)) continue;
+        done[rot] ??= PH.fit.fitPiece(p.fitPrep, G, rot, ref.C).e;
+        out.set(`${cell},${rot}`, done[rot]);
+      }
+    }
+    return out;
+  }
+
+  // Gap rims for the outline fit, per free place next to the finished part:
+  // from the photo that shows the place sharpest, the sides with a filled
+  // neighbour.
+  function gapRims(ref, scenes, free, filled) {
+    const { cols, rows } = ref;
+    const rims = new Map();
+    for (let cell = 0; cell < cols * rows; cell++) {
+      if (!free[cell]) continue;
+      const r = Math.floor(cell / cols);
+      const c = cell % cols;
+      const sides = PH.match.DIRS.map(([dx, dy]) => {
+        const nr = r + dy;
+        const nc = c + dx;
+        return nr >= 0 && nc >= 0 && nr < rows && nc < cols && filled.has(nr * cols + nc);
+      });
+      if (!sides.some(Boolean)) continue;
+      let best = null;
+      for (const s of scenes) {
+        if (!s.board?.gaps) continue;
+        s.board.gapMap ??= new Map(s.board.gaps);
+        if (!s.board.gapMap.has(cell)) continue;
+        const q = s.board.k / s.scale;
+        if (!best || q > best.q) best = { q, s };
+      }
+      if (!best) continue;
+      // Same rim object as long as photo and sides stay: fits are kept on it.
+      const board = best.s.board;
+      board.rims ??= new Map();
+      const key = `${cell}:${sides.join()}`;
+      if (!board.rims.has(key))
+        board.rims.set(key, PH.fit.prepareGap(board.gapMap.get(cell), cell, ref, sides));
+      const G = board.rims.get(key);
+      if (G) rims.set(cell, G);
+    }
+    return rims;
+  }
+
   function runAssign(items, ref, colors, ctx, progress) {
     for (const [n, it] of items.entries()) {
       if (n % 10 === 0) progress(`Vergleich mit der Vorlage: Teil ${n + 1} von ${items.length} …`);
@@ -519,7 +688,16 @@
       // Plain-coloured pieces: the colour alone puts the right place far
       // down, so only places where knobs and holes fit are compared.
       const fits = ctx.gaps ? (cell, rot) => !gapFit(it.sides, { cell, rot }, ctx.gaps).bad : null;
+      // The whole outline laid into each gap of the finished part; the best
+      // fits are compared with the reference whatever the colour says.
+      const fit = ctx.rims && outlineFits(it, ctx.rims, fits, ref);
+      if (fit)
+        for (const [key] of [...fit].sort((a, b) => a[1] - b[1]).slice(0, 12)) {
+          const [cell, rot] = key.split(',').map(Number);
+          if (!must.some((m) => m.cell === cell && m.rot === rot)) must.push({ cell, rot });
+        }
       it.cands = PH.match.candidates(it.prep, it.sides, ref, ctx.free, must, fits);
+      if (fit) for (const cd of it.cands) cd.fit = fit.get(`${cd.cell},${cd.rot}`);
     }
     return PH.match.assign(items, ref, { filled: ctx.filled, holes: ctx.holes, unknown: ctx.unknown });
   }
@@ -720,6 +898,8 @@
         items.push({
           scene: si,
           index: pi,
+          piece: p,
+          planeCorners: s.board ? p.shape.corners.map((q) => PH.geom.applyH(s.board.Hi, ...q)) : null,
           raw: p.raw,
           sides: p.shape.sides,
           shape: p.shape,
@@ -737,6 +917,7 @@
       filled: [...filled],
       holes,
       gaps: atEdge ? gaps : null,
+      rims: atEdge ? gapRims(ref, scenes, free, filled) : null,
       // Places not filled and not next to the finished part (or not in the photo).
       unknown: atEdge ? N - filled.size - free.reduce((a, b) => a + b, 0) : 0,
     };
