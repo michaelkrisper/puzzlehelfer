@@ -501,3 +501,10 @@ dialog h3 {
   min-width: 1.6rem;
   font-weight: bold;
 }
+
+/* Buttons and rows set their own display; hidden must still hide them. */
+[hidden],
+.btn[hidden],
+.row[hidden] {
+  display: none;
+}

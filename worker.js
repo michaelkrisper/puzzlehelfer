@@ -131,7 +131,7 @@ const handlers = {
     previews.clear();
     return {};
   },
-  solve({ id, placed = [], removed = [], cells = [], crop = null }) {
+  solve({ id, placed = [], removed = [], nofit = [], cells = [], crop = null }) {
     const ids = [...scenes.keys()];
     const list = ids.map((k) => scenes.get(k));
     const local = (arr) =>
@@ -140,12 +140,17 @@ const handlers = {
       progress: progressFor(id),
       placed: local(placed),
       removed: local(removed),
+      nofit: local(nofit),
       cells,
       crop,
     });
     const { free } = PH.pipeline.boardState(ref, list, cells);
     return {
       suggestions: sugg.map((s) => ({ ...s, sceneId: ids[s.scene] })),
+      gaps: (sugg.gaps ?? []).map((g) => ({
+        ...g,
+        cands: g.cands.map((c) => ({ ...c, sceneId: ids[c.scene] })),
+      })),
       free: [...free.keys()].filter((c) => free[c]),
       scenes: ids.map((sid, i) => {
         const s = list[i];

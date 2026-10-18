@@ -5,7 +5,7 @@ const REF_MAX = 2400;
 const SCENE_MAX = 4000;
 const COUNTS = [100, 200, 300, 500, 1000, 1500, 2000];
 // Same as VERSION in sw.js; bump both together.
-const APP_VERSION = 'v33';
+const APP_VERSION = 'v34';
 const ARROWS = 6;
 const $ = (id) => document.getElementById(id);
 
@@ -105,8 +105,9 @@ async function decode(blob, max) {
   c.height = h;
   const g = c.getContext('2d');
   g.drawImage(bmp, 0, 0, w, h);
+  const full = [bmp.width, bmp.height];
   bmp.close();
-  return { canvas: c, image: g.getImageData(0, 0, w, h) };
+  return { canvas: c, image: g.getImageData(0, 0, w, h), full };
 }
 
 // density: canvas pixels per CSS pixel, by default the device's; more for
@@ -156,6 +157,15 @@ const state = {
   // pieces move to the end of the queue.
   focus: null, // {sceneId, index, alt}
   skipped: new Set(),
+  // By gap: the gaps with two or three filled neighbours, each with the
+  // pieces that fit best (worker solve: gaps).
+  gapMode: false,
+  gapModeChosen: false,
+  gapFocus: null, // {cell, alt}
+  skippedGaps: new Set(),
+  // Every "Passt" / "Passt nicht", kept across sessions: real solutions to
+  // measure the recognition against (export as JSON).
+  attempts: [],
   selected: null,
 };
 
@@ -549,8 +559,16 @@ for (const input of document.querySelectorAll('input[data-scene]')) {
 }
 
 async function addScene(file, thenSolve = true) {
-  const { canvas, image } = await decode(file, SCENE_MAX);
-  const s = { id: sceneSeq++, canvas, image, url: URL.createObjectURL(file), busy: true };
+  const { canvas, image, full } = await decode(file, SCENE_MAX);
+  const s = {
+    id: sceneSeq++,
+    canvas,
+    image,
+    full,
+    name: file.name,
+    url: URL.createObjectURL(file),
+    busy: true,
+  };
   state.scenes.push(s);
   state.current = s.id;
   renderThumbs();
@@ -710,7 +728,12 @@ $('detail-removed').addEventListener('click', async () => {
   await solve();
 });
 $('undo-placed').addEventListener('click', async () => {
-  state.marks.pop();
+  const m = state.marks.pop();
+  // A mistaken "Passt" / "Passt nicht" is no solution either.
+  if (m?.logged) {
+    state.attempts.pop();
+    await saveAttempts();
+  }
   await solve();
 });
 
@@ -718,6 +741,8 @@ $('new-round').addEventListener('click', async () => {
   state.marks = [];
   state.skipped.clear();
   state.focus = null;
+  state.gapFocus = null;
+  state.skippedGaps.clear();
   for (const s of state.scenes) URL.revokeObjectURL(s.url);
   state.scenes = [];
   state.current = null;
@@ -775,6 +800,7 @@ async function solve() {
   const r = await call('solve', {
     placed: state.marks.filter((m) => m.kind === 'placed'),
     removed: state.marks.filter((m) => m.kind === 'removed'),
+    nofit: state.marks.filter((m) => m.kind === 'nofit'),
     cells: state.marks.filter((m) => m.kind === 'cell').map(({ cell, free }) => ({ cell, free })),
     crop: state.crop,
   });
@@ -876,7 +902,55 @@ function drawCellTile(cv, row, col) {
   g.strokeRect(m * k, m * k, C * k, C * k);
 }
 
+// By gap: gaps in order, skipped ones last; the one shown.
+function gapQueue() {
+  const q = state.result?.gaps ?? [];
+  return [
+    ...q.filter((g) => !state.skippedGaps.has(g.cell)),
+    ...q.filter((g) => state.skippedGaps.has(g.cell)),
+  ];
+}
+
+function focusedGap() {
+  const f = state.gapFocus;
+  return f ? (state.result?.gaps ?? []).find((g) => g.cell === f.cell) : null;
+}
+
+// What the viewer highlights: the piece in hand and the place it is tried
+// at (null: all arrows).
+function focusTarget() {
+  if (state.allArrows) return null;
+  if (state.gapMode) {
+    const g = focusedGap();
+    const c = g?.cands[Math.min(state.gapFocus.alt, g.cands.length - 1)];
+    return c ? { ...c, label: state.gapFocus.alt + 1, level: 'ok' } : null;
+  }
+  const f = focused();
+  return f ? { ...f, ...candsOf(f)[state.focus.alt] } : null;
+}
+
 function renderSteps() {
+  const gaps = state.result?.gaps ?? [];
+  if (!state.gapModeChosen) state.gapMode = gaps.length > 0;
+  if (!gaps.length) state.gapMode = false;
+  show('step-mode', gaps.length > 0);
+  $('mode-gap').classList.toggle('primary', state.gapMode);
+  $('mode-piece').classList.toggle('primary', !state.gapMode);
+  show('step-removed', !state.gapMode);
+  if (state.gapMode) renderGapStep();
+  else renderPieceStep();
+  renderPieceList(queue(), state.gapMode ? null : focused());
+  drawViewer();
+}
+
+function showScene(sceneId) {
+  if (sceneId === state.current) return;
+  state.current = sceneId;
+  renderThumbs();
+  renderResult();
+}
+
+function renderPieceStep() {
   const q = queue();
   let x = focused();
   if (!x) {
@@ -884,44 +958,86 @@ function renderSteps() {
     state.focus = x ? { sceneId: x.sceneId, index: x.index, alt: 0 } : null;
   }
   show('step', !!x);
-  if (x) {
-    if (x.sceneId !== state.current) {
-      state.current = x.sceneId;
-      renderThumbs();
-      renderResult();
-    }
-    const cands = candsOf(x);
-    const alt = Math.min(state.focus.alt, cands.length - 1);
-    const c = cands[alt];
-    const n = q.indexOf(x) + 1;
-    $('step-title').textContent = `Teil ${x.label}`;
-    $('step-sub').textContent =
-      `${n} von ${q.length}${state.skipped.has(keyOf(x)) ? ' · übersprungen' : ''} · ${Math.round(x.conf * 100)} %`;
-    drawPieceTile($('step-piece'), x, c.rot);
-    const box = $('step-cands');
-    box.replaceChildren();
-    cands.forEach((a, i) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = `cand${i === alt ? ' on' : ''}`;
-      const cv = document.createElement('canvas');
-      cv.width = cv.height = 144;
-      drawCellTile(cv, a.row, a.col);
-      const t = document.createElement('span');
-      t.textContent = `R${a.row + 1} S${a.col + 1} · ${Math.round((a.p ?? 0) * 100)} %`;
-      b.append(cv, t);
-      b.addEventListener('click', () => {
-        state.focus.alt = i;
-        renderSteps();
-        drawViewer();
-      });
-      box.append(b);
+  if (!x) return;
+  showScene(x.sceneId);
+  const cands = candsOf(x);
+  const alt = Math.min(state.focus.alt, cands.length - 1);
+  const c = cands[alt];
+  const n = q.indexOf(x) + 1;
+  $('step-title').textContent = `Teil ${x.label}`;
+  $('step-sub').textContent =
+    `${n} von ${q.length}${state.skipped.has(keyOf(x)) ? ' · übersprungen' : ''} · ${Math.round(x.conf * 100)} %`;
+  drawPieceTile($('step-piece'), x, c.rot);
+  const box = $('step-cands');
+  box.replaceChildren();
+  cands.forEach((a, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `cand${i === alt ? ' on' : ''}`;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 144;
+    drawCellTile(cv, a.row, a.col);
+    const t = document.createElement('span');
+    t.textContent = `R${a.row + 1} S${a.col + 1} · ${Math.round((a.p ?? 0) * 100)} %`;
+    b.append(cv, t);
+    b.addEventListener('click', () => {
+      state.focus.alt = i;
+      renderSteps();
     });
-    $('step-text').textContent = `Reihe ${c.row + 1}, Spalte ${c.col + 1}. ${turnText(c.turn)}`;
-  }
-  renderPieceList(q, x);
-  drawViewer();
+    box.append(b);
+  });
+  $('step-text').textContent = `Reihe ${c.row + 1}, Spalte ${c.col + 1}. ${turnText(c.turn)}`;
 }
+
+// A gap and the pieces whose outline fits it best: try them one by one.
+function renderGapStep() {
+  const q = gapQueue();
+  let g = focusedGap();
+  if (!g) {
+    g = q[0] ?? null;
+    state.gapFocus = g ? { cell: g.cell, alt: 0 } : null;
+  }
+  show('step', !!g);
+  if (!g) return;
+  const alt = Math.min(state.gapFocus.alt, g.cands.length - 1);
+  const c = g.cands[alt];
+  showScene(c.sceneId);
+  const n = q.indexOf(g) + 1;
+  $('step-title').textContent = `Lücke R${g.row + 1} S${g.col + 1}`;
+  $('step-sub').textContent =
+    `${n} von ${q.length}${state.skippedGaps.has(g.cell) ? ' · übersprungen' : ''} · ${g.sides} fertige Nachbarn`;
+  drawCellTile($('step-piece'), g.row, g.col);
+  const box = $('step-cands');
+  box.replaceChildren();
+  g.cands.forEach((a, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `cand${i === alt ? ' on' : ''}`;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 144;
+    drawPieceTile(cv, a, a.rot);
+    const t = document.createElement('span');
+    t.textContent = `Teil ${i + 1} · ${Math.round(a.p * 100)} %`;
+    b.append(cv, t);
+    b.addEventListener('click', () => {
+      state.gapFocus.alt = i;
+      renderSteps();
+    });
+    box.append(b);
+  });
+  $('step-text').textContent = `Teil ${alt + 1} (Pfeil im Foto) hier probieren. ${turnText(c.turn)}`;
+}
+
+$('mode-gap').addEventListener('click', () => {
+  state.gapMode = true;
+  state.gapModeChosen = true;
+  renderSteps();
+});
+$('mode-piece').addEventListener('click', () => {
+  state.gapMode = false;
+  state.gapModeChosen = true;
+  renderSteps();
+});
 
 function renderPieceList(q, cur) {
   const box = $('piece-list');
@@ -948,6 +1064,8 @@ function renderPieceList(q, cur) {
     }
     b.addEventListener('click', () => {
       state.focus = { sceneId: x.sceneId, index: x.index, alt: 0 };
+      state.gapMode = false;
+      state.gapModeChosen = true;
       renderSteps();
       $('step').scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
@@ -955,20 +1073,103 @@ function renderPieceList(q, cur) {
   }
 }
 
-$('step-placed').addEventListener('click', async () => {
+// The piece and place tried now, for "Passt" / "Passt nicht".
+function currentTry() {
+  if (state.gapMode) {
+    const g = focusedGap();
+    const c = g?.cands[Math.min(state.gapFocus.alt, g.cands.length - 1)];
+    return c ? { piece: c, cell: g.cell, rot: c.rot, p: c.p } : null;
+  }
   const x = focused();
-  if (!x) return;
+  if (!x) return null;
   const c = candsOf(x)[state.focus.alt] ?? x;
-  state.marks.push({ kind: 'placed', sceneId: x.sceneId, index: x.index, cell: c.cell, rot: c.rot });
-  state.skipped.delete(keyOf(x));
+  return { piece: x, cell: c.cell, rot: c.rot, p: c.p };
+}
+
+async function saveAttempts() {
+  await store('attempts', state.attempts).catch((err) => console.warn(err));
+  const n = state.attempts.length;
+  $('export-attempts').hidden = !n;
+  $('export-attempts').textContent = `Versuche exportieren (${n})`;
+}
+
+// Kept with the photo's file name and the piece's position in it (photo
+// pixels), so it can be found again on the original photo.
+async function logAttempt(t, ok) {
+  const s = state.scenes.find((v) => v.id === t.piece.sceneId);
+  const info = state.result.scenes.find((v) => v.id === t.piece.sceneId);
+  const k = s?.full && info ? s.full[0] / info.width : 1;
+  state.attempts.push({
+    time: new Date().toISOString(),
+    ok,
+    mode: state.gapMode ? 'gap' : 'piece',
+    photo: s?.name ?? null,
+    photos: state.scenes.map((v) => v.name),
+    at: t.piece.center.map((v) => Math.round(v * k)),
+    cell: t.cell,
+    row: Math.floor(t.cell / state.cols),
+    col: t.cell % state.cols,
+    rot: t.rot,
+    p: t.p ?? null,
+    grid: [state.cols, state.rows],
+    version: APP_VERSION,
+  });
+  await saveAttempts();
+}
+
+$('export-attempts').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(state.attempts, null, 1)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `puzzlehelfer-versuche-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '')}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+
+// Fits: put in, its place counts as taken.
+$('step-placed').addEventListener('click', async () => {
+  const t = currentTry();
+  if (!t) return;
+  await logAttempt(t, true);
+  state.marks.push({
+    kind: 'placed',
+    sceneId: t.piece.sceneId,
+    index: t.piece.index,
+    cell: t.cell,
+    rot: t.rot,
+    logged: true,
+  });
+  state.skipped.delete(keyOf(t.piece));
   state.focus = null;
+  state.gapFocus = null;
+  await solve();
+});
+// Does not fit there: that piece is not compared at that place again.
+$('step-nofit').addEventListener('click', async () => {
+  const t = currentTry();
+  if (!t) return;
+  await logAttempt(t, false);
+  state.marks.push({
+    kind: 'nofit',
+    sceneId: t.piece.sceneId,
+    index: t.piece.index,
+    cell: t.cell,
+    logged: true,
+  });
   await solve();
 });
 $('step-skip').addEventListener('click', () => {
-  const x = focused();
-  if (!x) return;
-  state.skipped.add(keyOf(x));
-  state.focus = null;
+  if (state.gapMode) {
+    const g = focusedGap();
+    if (!g) return;
+    state.skippedGaps.add(g.cell);
+    state.gapFocus = null;
+  } else {
+    const x = focused();
+    if (!x) return;
+    state.skipped.add(keyOf(x));
+    state.focus = null;
+  }
   renderSteps();
 });
 $('step-removed').addEventListener('click', async () => {
@@ -1202,7 +1403,7 @@ function drawOverlay(g, cur, table = false) {
     g.stroke();
   }
   if (table && state.edit) return;
-  const f = !state.allArrows && focused();
+  const f = focusTarget();
   if (f && (f.sceneId === cur.s.id || table)) {
     if (f.sceneId === cur.s.id) drawFocus(g, cur.info, f, px);
     return;
@@ -1225,17 +1426,17 @@ function drawArrows(g, sugg, board, px) {
 }
 
 // Step by step: only the piece in hand, its place and turn.
-function drawFocus(g, info, f, px) {
-  const c = { ...f, ...candsOf(f)[state.focus.alt] };
-  poly(g, info.pieces[f.index].outline);
+// c: piece with the place it is tried at (focusTarget).
+function drawFocus(g, info, c, px) {
+  poly(g, info.pieces[c.index].outline);
   g.strokeStyle = '#4fb3ff';
   g.lineWidth = 5 * px;
   g.stroke();
   if (c.target && info.board) {
-    arrow(g, f.center, c.target, '#4fb3ff', px);
+    arrow(g, c.center, c.target, '#4fb3ff', px);
     targetMarker(g, { ...c, level: 'ok' }, info.board, px);
   }
-  badge(g, f.center, c, px);
+  badge(g, c.center, c, px);
 }
 
 function drawUnclearAndGroups(g, info, px) {
@@ -1643,7 +1844,10 @@ function tapAt(sx, sy) {
     );
     if (!hit) continue;
     if (hit.cell !== null && !state.edit) {
+      // A piece tapped: its own places.
       state.focus = { sceneId: hit.sceneId, index: hit.index, alt: 0 };
+      state.gapMode = false;
+      state.gapModeChosen = true;
       renderSteps();
     } else openDetail(hit, info);
     return;
@@ -1822,6 +2026,8 @@ zoomable($('map'));
 // ---------- Start ----------
 (async () => {
   try {
+    state.attempts = (await load('attempts')) ?? [];
+    await saveAttempts();
     const saved = await load('ref');
     if (saved?.blob) {
       state.refBlob = saved.blob;

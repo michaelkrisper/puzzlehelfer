@@ -681,7 +681,14 @@
   function runAssign(items, ref, colors, ctx, progress) {
     // Plain-coloured pieces: the colour alone puts the right place far down,
     // so only places where knobs and holes fit are compared.
-    const typeOk = (it) => (ctx.gaps ? (cell, rot) => !gapFit(it.sides, { cell, rot }, ctx.gaps).bad : null);
+    // Pieces the user tried at a place without luck ("Passt nicht") are not
+    // compared there again.
+    const typeOk = (it) =>
+      ctx.gaps || ctx.nofit?.size
+        ? (cell, rot) =>
+            !ctx.nofit?.has(`${it.scene}:${it.index}:${cell}`) &&
+            (!ctx.gaps || !gapFit(it.sides, { cell, rot }, ctx.gaps).bad)
+        : null;
     // Outlines laid into the gaps first: how telling a fit is depends on how
     // well all the other pieces fit there.
     if (ctx.rims?.size) progress('Umrisse werden in die Lücken gelegt …');
@@ -696,6 +703,7 @@
       // The most telling fits are compared with the reference whatever the
       // colour says.
       const L = evidence[n];
+      it.evidence = L;
       if (L)
         for (const [key] of [...L].sort((a, b) => b[1] - a[1]).slice(0, 12)) {
           const [cell, rot] = key.split(',').map(Number);
@@ -961,6 +969,7 @@
       holes,
       gaps: atEdge ? gaps : null,
       rims,
+      nofit: new Set((opts.nofit ?? []).map((p) => `${p.scene}:${p.index}:${p.cell}`)),
       // Places not filled and not next to the finished part (or not in the photo).
       unknown: atEdge ? N - filled.size - free.reduce((a, b) => a + b, 0) : 0,
     };
@@ -973,6 +982,7 @@
       }
     }
     const evOf = new Map(active.map((it, k) => [it, result.get(k)]));
+    const gapList = rims?.size ? gapCandidates(active, rims, scenes, ref, free) : [];
     const done = [...placed.values()]
       .filter((p) => scenes[p.scene]?.pieces[p.index])
       .map((p) => ({
@@ -985,7 +995,7 @@
         rot: p.rot,
         placed: true,
       }));
-    return [
+    const out = [
       ...done,
       ...items.map((it, idx) => {
         const twin = dup.has(idx) ? items[dup.get(idx)] : null;
@@ -1027,6 +1037,45 @@
         };
       }),
     ];
+    out.gaps = gapList;
+    return out;
+  }
+
+  // Gaps with two or more filled neighbours, each with the pieces whose
+  // outline fits its rim best (place → pieces instead of piece → place): at
+  // a single side many plain pieces fit alike, at two or three the right one
+  // stands out more. p: share among all pieces that may go there. Clearest
+  // gaps first.
+  function gapCandidates(items, rims, scenes, ref, free) {
+    const out = [];
+    for (const [cell, G] of rims) {
+      const sides = G.sides.filter(Boolean).length;
+      if (!free[cell] || sides < 2) continue;
+      const ranked = [];
+      for (const it of items) {
+        let best = null;
+        for (let rot = 0; rot < 4; rot++) {
+          const L = it.evidence?.get(`${cell},${rot}`);
+          if (L !== undefined && (!best || L > best.L)) best = { L, rot };
+        }
+        if (best) ranked.push({ it, ...best });
+      }
+      if (ranked.length < 2) continue;
+      ranked.sort((a, b) => b.L - a.L);
+      // Halved: the same piece on two photos often prefers another place, so
+      // the evidence is not to be taken at face value.
+      const z = ranked.reduce((t, x) => t + Math.exp((x.L - ranked[0].L) / 2), 0);
+      const cands = ranked.slice(0, 3).map((x) => ({
+        scene: x.it.scene,
+        index: x.it.index,
+        center: x.it.shape.center,
+        corners: x.it.shape.corners,
+        ...describe({ cell, rot: x.rot }, x.it, scenes[x.it.scene], ref),
+        p: Math.exp((x.L - ranked[0].L) / 2) / z,
+      }));
+      out.push({ cell, row: Math.floor(cell / ref.cols), col: cell % ref.cols, sides, cands });
+    }
+    return out.sort((a, b) => b.cands[0].p - a.cands[0].p);
   }
 
   // How a piece at cand (cell, rot) fits the gap sides of the finished part:

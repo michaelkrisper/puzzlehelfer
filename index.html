@@ -81,6 +81,10 @@
         <div id="thumbs" class="thumbs"></div>
         <p id="status" class="status" role="status" aria-live="polite"></p>
         <div id="result" hidden>
+          <div id="step-mode" class="row" hidden>
+            <button type="button" class="btn small" id="mode-gap">Nach Lücke</button>
+            <button type="button" class="btn small" id="mode-piece">Nach Teil</button>
+          </div>
           <div id="step" class="step" hidden>
             <div class="step-head"><b id="step-title"></b><span id="step-sub" class="muted"></span></div>
             <div class="step-body">
@@ -89,7 +93,8 @@
             </div>
             <p id="step-text" class="step-text"></p>
             <div class="row">
-              <button type="button" class="btn primary" id="step-placed">Eingesetzt</button>
+              <button type="button" class="btn primary" id="step-placed">Passt</button>
+              <button type="button" class="btn" id="step-nofit">Passt nicht</button>
               <button type="button" class="btn" id="step-skip">Überspringen</button>
               <button type="button" class="btn" id="step-removed">Entfernen</button>
             </div>
@@ -115,6 +120,7 @@
           <div class="ref-view"><canvas id="map"></canvas></div>
           <div class="row">
             <button type="button" class="btn" id="new-round">Neue Runde (nach dem Einsetzen)</button>
+            <button type="button" class="btn" id="export-attempts" hidden>Versuche exportieren</button>
           </div>
         </div>
       </section>

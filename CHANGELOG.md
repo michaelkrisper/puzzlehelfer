@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- "Nach Lücke": at the end the card shows a gap with two or three finished
+  neighbours and the three pieces whose outline fits it best, clearest gaps
+  first; the photo shows the piece tried with its arrow. At a single side
+  many sky pieces fit alike, so gaps with one neighbour are left out.
+  "Nach Teil" switches back; tapping a piece also does.
+- "Passt" / "Passt nicht" replace "Eingesetzt": "Passt nicht" rules the
+  piece out at that place for the next search. Every attempt is kept on the
+  phone (photo, piece position, place, rotation, result) and can be saved
+  with "Versuche exportieren"; "Rückgängig" also drops it.
+- Hidden buttons stay hidden ("Rückgängig" showed without anything to
+  undo).
 - Sorting trays (grey leather with sheen) next to the black mat: mat and
   trays count together as table against a plain puzzle area at the photo
   border, and the sheen no longer lets cream pieces pass as table. Tray

@@ -49,6 +49,16 @@ ignored) and toggles places the recognition got wrong (tap: free/filled).
 Pieces are numbered by probability: 1 is the likeliest, the step card shows
 the percentage. An honest low percentage is better than a wrong "sure".
 
+At the end, with plain pieces and a finished part around the gaps, the card
+works **by gap** ("Nach Lücke"): a gap with two or three finished
+neighbours and the three pieces whose outline fits it best, the clearest
+gaps first. Try them in turn: **Passt** puts the piece in, **Passt nicht**
+rules that piece out at that gap. "Nach Teil" switches back to one piece
+with its places. Every "Passt" / "Passt nicht" is kept on the phone;
+**Versuche exportieren** saves them as JSON (photo name, piece position,
+place, rotation, result) to check and improve the recognition with real
+solutions.
+
 ## How it works
 
 ```mermaid
