@@ -138,6 +138,7 @@
     const { cols } = ref;
     const xs = [];
     const ys = [];
+    const of = [];
     const sides = [false, false, false, false];
     for (let d = 0; d < 4; d++) {
       const pts = rims[d];
@@ -146,25 +147,56 @@
       for (let i = 0; i < pts.length; i += 4) {
         xs.push(pts[i]);
         ys.push(pts[i + 1]);
+        of.push(d);
       }
     }
     if (!sides.some(Boolean)) return null;
+    // The rims run from corner to corner of the place: where the grid is off
+    // locally (a fifth of a place at the far side of a photo), their ends
+    // tell where the place really is.
+    const r = Math.floor(cell / cols);
+    const c = cell % cols;
+    const { C } = ref;
+    let ox = 0;
+    let oy = 0;
+    let n = 0;
+    for (let d = 0; d < 4; d++) {
+      const pts = rims[d];
+      if (!pts || !sides[d]) continue;
+      for (const i of [0, pts.length - 2]) {
+        const x = pts[i];
+        const y = pts[i + 1];
+        const dx = x - Math.round(x / C) * C;
+        const dy = y - Math.round(y / C) * C;
+        if (Math.abs(Math.round(x / C) - c - 0.5) > 0.6 || Math.abs(Math.round(y / C) - r - 0.5) > 0.6)
+          continue;
+        ox += dx;
+        oy += dy;
+        n++;
+      }
+    }
     return {
       x: Float64Array.from(xs),
       y: Float64Array.from(ys),
+      side: Uint8Array.from(of),
       sides,
-      r: Math.floor(cell / cols),
-      c: cell % cols,
+      r,
+      c,
+      ox: n ? ox / n : 0,
+      oy: n ? oy / n : 0,
     };
   }
 
   // Lay piece P into the gap G turned by rot (piece side s faces direction
   // (s + rot) % 4): start from the corners, then turn and shift by
-  // Gauss-Newton on the rim points (those within TAU). Returns the mean rim
-  // distance in places and the pose.
+  // Gauss-Newton on the rim points (those within TAU). The corners are often
+  // off by a few degrees and the fit then stays in a wrong groove: it starts
+  // turned a little either way as well, the best counts. Returns the mean
+  // rim distance in places and the pose.
+  const TURNS = [0, (-7 * Math.PI) / 180, (7 * Math.PI) / 180];
   function fitPiece(P, G, rot, C) {
-    const cx = (G.c + 0.5) * C;
-    const cy = (G.r + 0.5) * C;
+    const cx = (G.c + 0.5) * C + (G.ox ?? 0);
+    const cy = (G.r + 0.5) * C + (G.oy ?? 0);
     const h = C / 2;
     const cell = [
       [-h, -h],
@@ -181,9 +213,79 @@
       cross += a[0] * b[1] - a[1] * b[0];
     }
     const start = [Math.atan2(cross, dot), cx, cy];
-    const lim = [(10 * Math.PI) / 180, 0.2 * C, 0.2 * C];
+    let best = null;
+    for (const t of TURNS) {
+      const f = settle(P, G, start, [start[0] + t, cx, cy], C);
+      if (!best || f.e < best.e) best = f;
+    }
+    return G.side ? sideShift(P, G, best, C) : best;
+  }
+
+  // Each side of a gap is the edge of another finished piece, and each of
+  // them lies a little off (up to about 5 % of a place): after the piece is
+  // laid in as a whole, every side may shift on its own by up to SHIFT.
+  // Measured on the table: the right piece first at 17 of 21 gaps instead
+  // of 13.
+  const SHIFT = 0.08;
+  function sideShift(P, G, f, C) {
+    const { th, tx, ty } = f;
+    const co = Math.cos(th);
+    const si = Math.sin(th);
     const tau = TAU * C;
-    let pose = start;
+    const lim = SHIFT * C;
+    const grad = [0, 0, 0];
+    const r = new Float32Array(G.x.length);
+    const shift = [];
+    let sum = 0;
+    for (let d = 0; d < 4; d++) {
+      if (!G.sides[d]) continue;
+      let ox = 0;
+      let oy = 0;
+      for (let it = 0; it < 6; it++) {
+        let a = 1e-6;
+        let b = 0;
+        let c = 1e-6;
+        let u = 0;
+        let v = 0;
+        for (let i = 0; i < G.x.length; i++) {
+          if (G.side[i] !== d) continue;
+          const dx = G.x[i] - tx - ox;
+          const dy = G.y[i] - ty - oy;
+          const q = sample(P, co * dx + si * dy, -si * dx + co * dy, grad);
+          if (Math.abs(q) >= tau) continue;
+          const jx = -grad[1] * co + grad[2] * si;
+          const jy = -grad[1] * si - grad[2] * co;
+          a += jx * jx;
+          b += jx * jy;
+          c += jy * jy;
+          u += jx * q;
+          v += jy * q;
+        }
+        const det = a * c - b * b;
+        if (det <= 0) break;
+        const sx = -(c * u - b * v) / det;
+        const sy = -(a * v - b * u) / det;
+        ox = Math.max(-lim, Math.min(lim, ox + sx));
+        oy = Math.max(-lim, Math.min(lim, oy + sy));
+        if (Math.abs(sx) < 0.02 && Math.abs(sy) < 0.02) break;
+      }
+      shift[d] = [ox, oy];
+    }
+    for (let i = 0; i < G.x.length; i++) {
+      const [ox, oy] = shift[G.side[i]];
+      const dx = G.x[i] - tx - ox;
+      const dy = G.y[i] - ty - oy;
+      const q = Math.max(-tau, Math.min(tau, sample(P, co * dx + si * dy, -si * dx + co * dy)));
+      r[i] = q / C;
+      sum += Math.abs(q);
+    }
+    return { e: sum / G.x.length / C, r, th, tx, ty, shift };
+  }
+
+  function settle(P, G, start, from, C) {
+    const lim = [(16 * Math.PI) / 180, 0.2 * C, 0.2 * C];
+    const tau = TAU * C;
+    let pose = from;
     const grad = [0, 0, 0];
     for (let it = 0; it < 8; it++) {
       const [th, tx, ty] = pose;

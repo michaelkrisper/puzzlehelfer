@@ -5,7 +5,7 @@ const REF_MAX = 2400;
 const SCENE_MAX = 4000;
 const COUNTS = [100, 200, 300, 500, 1000, 1500, 2000];
 // Same as VERSION in sw.js; bump both together.
-const APP_VERSION = 'v34';
+const APP_VERSION = 'v35';
 const ARROWS = 6;
 const $ = (id) => document.getElementById(id);
 

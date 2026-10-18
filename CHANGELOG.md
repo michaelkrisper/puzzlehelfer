@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Gap rims grow inward: a piece put in with "Passt" lends its own outline,
+  laid into its place, as the rim of its free neighbours, so a hole is
+  filled from its border to the middle without a new photo. In the last
+  photo of the Great Wave (9 gaps nobody could fill) a replay of the gap
+  mode places all 9, each at the first try.
+- Each side of a gap is the edge of another finished piece, each lying a
+  little off: after the piece is laid in as a whole, every side may shift
+  on its own by up to 8 % of a place (right piece first at 17 of 21 real
+  gaps instead of 13). The fit also starts turned 7° either way, and from
+  where the rim's corners put the place (the grid was off by a fifth of a
+  place at the far side of a photo).
+- Every piece goes into one gap only: a piece that fits another gap far
+  better drops back here (soft one-to-one assignment over all gaps).
+- At the very end, with two or three pieces left, gaps still get their
+  suggestions (at least three pieces were needed to compare). Where a rim
+  is measured, a side read wrongly as knob or hole no longer rules out the
+  right piece.
+- Measured on two photos from the table with the solution from photos of
+  the finished puzzle: right piece first at 19 of 21 gaps (was 12); replay
+  of the 28-gap photo: 25 of 26 pieces placed, 1.36 tries each.
+
 - "Nach Lücke": at the end the card shows a gap with two or three finished
   neighbours and the three pieces whose outline fits it best, clearest gaps
   first; the photo shows the piece tried with its arrow. At a single side

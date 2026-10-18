@@ -644,7 +644,7 @@
   // Gap rims for the outline fit, per free place next to the finished part:
   // from the photo that shows the place sharpest, the sides with a filled
   // neighbour.
-  function gapRims(ref, scenes, free, filled) {
+  function gapRims(ref, scenes, free, filled, extra = null) {
     const { cols, rows } = ref;
     const rims = new Map();
     for (let cell = 0; cell < cols * rows; cell++) {
@@ -665,17 +665,115 @@
         const q = s.board.k / s.scale;
         if (!best || q > best.q) best = { q, s };
       }
-      if (!best) continue;
-      // Same rim object as long as photo and sides stay: fits are kept on it.
-      const board = best.s.board;
-      board.rims ??= new Map();
-      const key = `${cell}:${sides.join()}`;
-      if (!board.rims.has(key))
-        board.rims.set(key, PH.fit.prepareGap(board.gapMap.get(cell), cell, ref, sides));
-      const G = board.rims.get(key);
+      const add = extra?.get(cell);
+      if (!best && !add) continue;
+      const base = best ? best.s.board.gapMap.get(cell) : [null, null, null, null];
+      const parts = add ? base.map((x, d) => add[d] ?? x) : base;
+      // Same rim object as long as photo, sides and put-in pieces stay: fits
+      // are kept on it.
+      const owner = best ? best.s.board : ref;
+      owner.rims ??= new Map();
+      const cache = owner.rims;
+      const key = `${cell}:${sides.join()}:${add ? add.map((x) => x?.key ?? '').join('|') : ''}`;
+      if (!cache.has(key)) cache.set(key, PH.fit.prepareGap(parts, cell, ref, sides));
+      const G = cache.get(key);
       if (G) rims.set(cell, G);
     }
     return rims;
+  }
+
+  // Rims from pieces the user has put in: the piece's own outline, laid into
+  // its place, is the edge its free neighbours must fit. So the finished part
+  // grows inward from the photo's rims without a new photo. cell → rim per
+  // side (as board gaps), each tagged with the piece it comes from.
+  function placedRims(ref, scenes, placed, free) {
+    const { cols, rows, C } = ref;
+    const out = new Map();
+    for (const p of placed) {
+      const s = scenes[p.scene];
+      const piece = s?.pieces[p.index];
+      if (!piece?.plane || !s.board) continue;
+      piece.fitPrep ??= PH.fit.preparePiece(
+        piece.plane,
+        piece.shape.corners.map((q) => PH.geom.applyH(s.board.Hi, ...q)),
+        C,
+      );
+      const P = piece.fitPrep;
+      const r = Math.floor(p.cell / cols);
+      const c = p.cell % cols;
+      // Its pose: laid into the rim the photos show of its place, else by
+      // its corners.
+      let G = null;
+      let q = 0;
+      for (const sc of scenes) {
+        if (!sc.board?.gaps) continue;
+        sc.board.gapMap ??= new Map(sc.board.gaps);
+        const g = sc.board.gapMap.get(p.cell);
+        const k = sc.board.k / sc.scale;
+        if (g && k > q) {
+          q = k;
+          G = PH.fit.prepareGap(g, p.cell, ref, [true, true, true, true]);
+        }
+      }
+      G ??= { x: [], y: [], sides: [false, false, false, false], r, c };
+      const f = PH.fit.fitPiece(P, G, p.rot, C);
+      const co = Math.cos(f.th);
+      const si = Math.sin(f.th);
+      const at = ([x, y]) => [f.tx + co * x - si * y, f.ty + si * x + co * y];
+      const pts = piece.plane.map(([x, y]) => at([x - P.cx, y - P.cy]));
+      const corners = P.corners.map(at);
+      const near = (list, [x, y]) => {
+        let k = 0;
+        for (let i = 1; i < list.length; i++)
+          if (Math.hypot(list[i][0] - x, list[i][1] - y) < Math.hypot(list[k][0] - x, list[k][1] - y)) k = i;
+        return k;
+      };
+      // Shared edge with the neighbour in direction d: corner to corner.
+      const ends = [
+        [
+          [c, r],
+          [c + 1, r],
+        ],
+        [
+          [c + 1, r],
+          [c + 1, r + 1],
+        ],
+        [
+          [c, r + 1],
+          [c + 1, r + 1],
+        ],
+        [
+          [c, r],
+          [c, r + 1],
+        ],
+      ];
+      PH.match.DIRS.forEach(([dx, dy], d) => {
+        const nr = r + dy;
+        const nc = c + dx;
+        if (nr < 0 || nc < 0 || nr >= rows || nc >= cols || !free[nr * cols + nc]) return;
+        const [a, b] = ends[d].map(([x, y]) => pts[near(pts, corners[near(corners, [x * C, y * C])])]);
+        const ia = pts.indexOf(a);
+        const ib = pts.indexOf(b);
+        const arc = (i, j) => {
+          const o = [];
+          for (let k = i; ; k = (k + 1) % pts.length) {
+            o.push(pts[k]);
+            if (k === j) return o;
+          }
+        };
+        const mx = ((ends[d][0][0] + ends[d][1][0]) / 2) * C;
+        const my = ((ends[d][0][1] + ends[d][1][1]) / 2) * C;
+        const far = (l) => l.reduce((t, [x, y]) => t + Math.hypot(x - mx, y - my), 0) / l.length;
+        const one = arc(ia, ib);
+        const two = arc(ib, ia);
+        const rim = Float64Array.from((far(one) < far(two) ? one : two).flat());
+        rim.key = `${p.scene}:${p.index}:${p.rot}`;
+        const n = nr * cols + nc;
+        if (!out.has(n)) out.set(n, [null, null, null, null]);
+        out.get(n)[(d + 2) % 4] = rim;
+      });
+    }
+    return out;
   }
 
   function runAssign(items, ref, colors, ctx, progress) {
@@ -683,11 +781,13 @@
     // so only places where knobs and holes fit are compared.
     // Pieces the user tried at a place without luck ("Passt nicht") are not
     // compared there again.
+    // Where a rim is measured, the outline fit judges knobs and holes itself:
+    // a side read wrongly as knob or hole must not rule out the right piece.
     const typeOk = (it) =>
       ctx.gaps || ctx.nofit?.size
         ? (cell, rot) =>
             !ctx.nofit?.has(`${it.scene}:${it.index}:${cell}`) &&
-            (!ctx.gaps || !gapFit(it.sides, { cell, rot }, ctx.gaps).bad)
+            (!ctx.gaps || ctx.rims?.has(cell) || !gapFit(it.sides, { cell, rot }, ctx.gaps).bad)
         : null;
     // Outlines laid into the gaps first: how telling a fit is depends on how
     // well all the other pieces fit there.
@@ -730,7 +830,7 @@
         }
         if (b) best.push(b.r);
       }
-      if (best.length < 3) continue;
+      if (!best.length) continue;
       const ev = PH.fit.evidence(best);
       fits.forEach((m, k) => {
         for (let rot = 0; rot < 4; rot++) {
@@ -952,7 +1052,8 @@
       });
     });
     const dup = findDuplicates(items, ref, scenes);
-    const rims = atEdge ? gapRims(ref, scenes, free, filled) : null;
+    const extra = atEdge && placed.size ? placedRims(ref, scenes, [...placed.values()], free) : null;
+    const rims = atEdge ? gapRims(ref, scenes, free, filled, extra) : null;
     // With gap rims to lay outlines into, pieces from photos without the
     // finished part have no outline on the table: colour and side profiles
     // alone put plain pieces anywhere (6 of 7 wrong at the table), so they
@@ -1044,37 +1145,69 @@
   // Gaps with two or more filled neighbours, each with the pieces whose
   // outline fits its rim best (place → pieces instead of piece → place): at
   // a single side many plain pieces fit alike, at two or three the right one
-  // stands out more. p: share among all pieces that may go there. Clearest
-  // gaps first.
+  // stands out more. Every piece goes into one gap only: a piece that fits
+  // another gap far better is unlikely here (soft one-to-one assignment over
+  // all gaps, Sinkhorn). p: chance among the pieces that may go there.
+  // Clearest gaps first.
+  const GAP_T = 2; // evidence halved: the same piece on two photos often prefers another place
   function gapCandidates(items, rims, scenes, ref, free) {
-    const out = [];
-    for (const [cell, G] of rims) {
-      const sides = G.sides.filter(Boolean).length;
-      if (!free[cell] || sides < 2) continue;
-      const ranked = [];
-      for (const it of items) {
-        let best = null;
+    const cells = [...rims.keys()].filter((c) => free[c]);
+    const best = cells.map((cell) =>
+      items.map((it) => {
+        let b = null;
         for (let rot = 0; rot < 4; rot++) {
           const L = it.evidence?.get(`${cell},${rot}`);
-          if (L !== undefined && (!best || L > best.L)) best = { L, rot };
+          if (L !== undefined && (!b || L > b.L)) b = { L, rot };
         }
-        if (best) ranked.push({ it, ...best });
+        return b;
+      }),
+    );
+    // A gap may hold a piece that is in no photo, a piece may belong to a
+    // place without a rim: both weigh like a middling piece there.
+    const med = (a) => {
+      const v = a.filter((x) => x !== null).sort((x, y) => x - y);
+      return v.length ? v[v.length >> 1] : 0;
+    };
+    const Lg = best.map((row) => med(row.map((b) => b?.L ?? null)));
+    const Lk = items.map((_, k) => med(best.map((row) => row[k]?.L ?? null)));
+    const w = best.map((row, g) => row.map((b) => (b ? Math.exp((b.L - Lg[g]) / GAP_T) : 0)));
+    const none = cells.map(() => 1);
+    const away = items.map((_, k) => Math.exp((Lk[k] - med(Lg)) / GAP_T));
+    const rs = cells.map(() => 1);
+    const cs = items.map(() => 1);
+    for (let it = 0; it < 30; it++) {
+      for (let g = 0; g < cells.length; g++) {
+        let t = none[g];
+        for (let k = 0; k < items.length; k++) t += w[g][k] * cs[k];
+        rs[g] = 1 / t;
       }
-      if (ranked.length < 2) continue;
-      ranked.sort((a, b) => b.L - a.L);
-      // Halved: the same piece on two photos often prefers another place, so
-      // the evidence is not to be taken at face value.
-      const z = ranked.reduce((t, x) => t + Math.exp((x.L - ranked[0].L) / 2), 0);
+      for (let k = 0; k < items.length; k++) {
+        let t = away[k];
+        for (let g = 0; g < cells.length; g++) t += w[g][k] * rs[g];
+        cs[k] = 1 / t;
+      }
+    }
+    const out = [];
+    cells.forEach((cell, g) => {
+      const G = rims.get(cell);
+      const sides = G.sides.filter(Boolean).length;
+      if (sides < 2) return;
+      const ranked = [];
+      items.forEach((it, k) => {
+        if (best[g][k]) ranked.push({ it, rot: best[g][k].rot, p: w[g][k] * rs[g] * cs[k] });
+      });
+      if (!ranked.length) return;
+      ranked.sort((a, b) => b.p - a.p);
       const cands = ranked.slice(0, 3).map((x) => ({
         scene: x.it.scene,
         index: x.it.index,
         center: x.it.shape.center,
         corners: x.it.shape.corners,
         ...describe({ cell, rot: x.rot }, x.it, scenes[x.it.scene], ref),
-        p: Math.exp((x.L - ranked[0].L) / 2) / z,
+        p: x.p,
       }));
       out.push({ cell, row: Math.floor(cell / ref.cols), col: cell % ref.cols, sides, cands });
-    }
+    });
     return out.sort((a, b) => b.cands[0].p - a.cands[0].p);
   }
 
