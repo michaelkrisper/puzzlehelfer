@@ -75,7 +75,8 @@
           Puzzle darf mit aufs Foto, dann zeigen Pfeile direkt auf den Platz.
         </p>
         <div class="row">
-          <label class="btn primary">Foto aufnehmen<input type="file" accept="image/*" capture="environment" data-scene hidden /></label>
+          <button type="button" class="btn primary" id="sweep-start">Tisch abfahren</button>
+          <label class="btn">Foto aufnehmen<input type="file" accept="image/*" capture="environment" data-scene hidden /></label>
           <label class="btn">Bild wählen<input type="file" accept="image/*" multiple data-scene hidden /></label>
         </div>
         <div id="thumbs" class="thumbs"></div>
@@ -134,6 +135,19 @@
         </div>
       </section>
     </main>
+
+    <!-- Sweep: the camera takes a photo whenever it is held still after moving on -->
+    <div id="sweep" class="sweep" hidden>
+      <video id="sweep-video" playsinline muted></video>
+      <div id="sweep-flash" class="sweep-flash"></div>
+      <div class="sweep-bar">
+        <p id="sweep-msg" role="status" aria-live="polite"></p>
+        <div class="row">
+          <button type="button" class="btn" id="sweep-shot">Foto jetzt</button>
+          <button type="button" class="btn primary" id="sweep-done">Fertig</button>
+        </div>
+      </div>
+    </div>
 
     <div class="tabbar" role="tablist">
       <button type="button" role="tab" id="tab-ref" data-tab="step-ref" aria-selected="true">

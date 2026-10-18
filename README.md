@@ -38,11 +38,16 @@ no photo leaves the device. The app's interface is in German.
    the app more gaps to work with.
 
 Several photos per round are possible (more pieces or close-ups; pick
-several at once with "Bild wählen"). A photo may show only part of the
-puzzle; places outside it are not suggested. Photos that show some of the
-finished part are put together into one picture of the table from above
-("Tisch von oben", the default with two or more): a piece on two photos
-lies at the same spot and is planned once, from the sharper photo.
+several at once with "Bild wählen"). Easiest is **Tisch abfahren**: the
+camera runs in the app; move the phone slowly over the table and hold it
+still for a moment every third of a picture, it takes a photo each time.
+All photos are put together into one picture of the table from above
+("Tisch von oben", the default with two or more): photos with some of the
+finished part by it, the others (close-ups of a tray) onto a photo they
+overlap. A photo that overlaps none is marked "nicht eingeordnet". The
+newest photo wins: photograph a spot again after putting pieces in or
+laying them out anew, and the table shows its new state. A piece on two
+photos taken together lies at the same spot and is planned once.
 "Korrigieren" there crops the table (drag the corners, pieces outside are
 ignored) and toggles places the recognition got wrong (tap: free/filled).
 

@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- "Tisch abfahren": the camera runs in the app; moving the phone over the
+  table and holding it still for a moment takes a photo whenever it has
+  moved on by about a third of the picture ("Foto jetzt" takes one at
+  once). Photos are analysed in the background, the places searched at
+  "Fertig".
+- Photos without the finished part (close-ups of a tray) are laid onto a
+  photo they overlap by ORB points of mat, trays and pieces, and get their
+  place on the table like the others: their pieces are part of the table
+  picture and of the outline fit at the end. On the photos of 18 October
+  the tray close-up found its place with 169 common points.
+- The newest photo wins: where a later photo shows the table, pieces of
+  earlier photos there are left out (they were put in or laid out anew),
+  and the table picture shows the later photo on top, its border blended
+  in. Gap rims come per side from the photo that shows that side
+  sharpest.
+- Photos that neither show the finished part nor overlap another photo
+  are marked "nicht eingeordnet".
+
 - "Nach Teil" lists each candidate place once (the same place turned
   otherwise came twice).
 

@@ -5,7 +5,7 @@ const REF_MAX = 2400;
 const SCENE_MAX = 4000;
 const COUNTS = [100, 200, 300, 500, 1000, 1500, 2000];
 // Same as VERSION in sw.js; bump both together.
-const APP_VERSION = 'v38';
+const APP_VERSION = 'v39';
 const ARROWS = 6;
 const $ = (id) => document.getElementById(id);
 
@@ -559,6 +559,151 @@ for (const input of document.querySelectorAll('input[data-scene]')) {
   });
 }
 
+// ---------- Sweep over the table ----------
+// The camera runs in the app: whenever it is held still after moving on by
+// about a third of the picture, it takes a photo. Each photo is laid onto
+// the ones before (core/stitch.js) and analysed in the background; a spot
+// photographed again later shows its new state (the newest photo wins).
+const sweep = {
+  stream: null,
+  timer: 0,
+  prev: null,
+  last: null,
+  still: 0,
+  n: 0,
+  busy: false,
+  chain: Promise.resolve(),
+};
+const SW = 96;
+const SH = 72;
+const sweepSmall = document.createElement('canvas');
+sweepSmall.width = SW;
+sweepSmall.height = SH;
+
+function sweepGray(video) {
+  const g = sweepSmall.getContext('2d', { willReadFrequently: true });
+  g.drawImage(video, 0, 0, SW, SH);
+  const d = g.getImageData(0, 0, SW, SH).data;
+  const out = new Float32Array(SW * SH);
+  for (let i = 0; i < out.length; i++) out[i] = 0.3 * d[i * 4] + 0.59 * d[i * 4 + 1] + 0.11 * d[i * 4 + 2];
+  return out;
+}
+
+// Mean difference of b shifted by (dx, dy) against a, on their overlap.
+function sweepDiff(a, b, dx, dy) {
+  let s = 0;
+  let n = 0;
+  for (let y = Math.max(0, dy); y < Math.min(SH, SH + dy); y += 2)
+    for (let x = Math.max(0, dx); x < Math.min(SW, SW + dx); x += 2) {
+      s += Math.abs(a[y * SW + x] - b[(y - dy) * SW + x - dx]);
+      n++;
+    }
+  return n > 40 ? s / n : 1e9;
+}
+
+// Part of the last photo still in view: the shift with the smallest
+// difference, searched coarsely.
+function sweepOverlap(a, b) {
+  let best = { e: 1e9, dx: 0, dy: 0 };
+  for (let dy = -30; dy <= 30; dy += 3)
+    for (let dx = -42; dx <= 42; dx += 3) {
+      const e = sweepDiff(a, b, dx, dy);
+      if (e < best.e) best = { e, dx, dy };
+    }
+  return (1 - Math.abs(best.dx) / SW) * (1 - Math.abs(best.dy) / SH);
+}
+
+function sweepSay(t) {
+  $('sweep-msg').textContent = `${t}${sweep.n ? ` · ${sweep.n} ${sweep.n === 1 ? 'Foto' : 'Fotos'}` : ''}`;
+}
+
+async function sweepGrab() {
+  const track = sweep.stream.getVideoTracks()[0];
+  if ('ImageCapture' in window) {
+    try {
+      return await new ImageCapture(track).takePhoto();
+    } catch (err) {
+      console.warn(err);
+    }
+  }
+  const v = $('sweep-video');
+  const c = document.createElement('canvas');
+  c.width = v.videoWidth;
+  c.height = v.videoHeight;
+  c.getContext('2d').drawImage(v, 0, 0);
+  return new Promise((r) => c.toBlob(r, 'image/jpeg', 0.92));
+}
+
+async function sweepShot(gray) {
+  sweep.busy = true;
+  $('sweep-flash').classList.add('on');
+  setTimeout(() => $('sweep-flash').classList.remove('on'), 120);
+  try {
+    const blob = await sweepGrab();
+    sweep.last = gray ?? sweepGray($('sweep-video'));
+    sweep.n++;
+    const file = new File([blob], `Schwenk-${Date.now()}.jpg`, { type: 'image/jpeg' });
+    sweep.chain = sweep.chain.then(() => addScene(file, false)).catch((err) => setStatus(err.message));
+    sweepSay('Weiterfahren …');
+  } finally {
+    sweep.still = 0;
+    sweep.busy = false;
+  }
+}
+
+function sweepTick() {
+  const v = $('sweep-video');
+  if (sweep.busy || !v.videoWidth) return;
+  const g = sweepGray(v);
+  const motion = sweep.prev ? sweepDiff(g, sweep.prev, 0, 0) : 1e9;
+  sweep.prev = g;
+  sweep.still = motion < 5 ? sweep.still + 1 : 0;
+  if (!sweep.last) {
+    if (sweep.still >= 3) sweepShot(g);
+    else sweepSay('Über das Puzzle halten und kurz stillhalten …');
+    return;
+  }
+  const o = sweepOverlap(sweep.last, g);
+  if (o < 0.25) sweepSay('Zu weit – etwas zurück, damit sich die Fotos überlappen.');
+  else if (o > 0.65) sweepSay(motion < 5 ? 'Langsam weiterfahren …' : 'Weiterfahren …');
+  else if (sweep.still >= 3) sweepShot(g);
+  else sweepSay('Kurz stillhalten …');
+}
+
+$('sweep-start').addEventListener('click', async () => {
+  try {
+    sweep.stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 4032 }, height: { ideal: 3024 } },
+      audio: false,
+    });
+  } catch (err) {
+    setStatus(`Kamera nicht verfügbar: ${err.message}`);
+    return;
+  }
+  const v = $('sweep-video');
+  v.srcObject = sweep.stream;
+  await v.play();
+  Object.assign(sweep, { prev: null, last: null, still: 0, n: 0 });
+  show('sweep', true);
+  sweepSay('Über das Puzzle halten und kurz stillhalten …');
+  sweep.timer = setInterval(sweepTick, 150);
+});
+
+$('sweep-shot').addEventListener('click', () => {
+  if (!sweep.busy) sweepShot(null);
+});
+
+$('sweep-done').addEventListener('click', async () => {
+  clearInterval(sweep.timer);
+  for (const t of sweep.stream?.getTracks() ?? []) t.stop();
+  sweep.stream = null;
+  show('sweep', false);
+  if (!sweep.n) return;
+  setStatus(`${sweep.n} ${sweep.n === 1 ? 'Foto wird' : 'Fotos werden'} ausgewertet …`);
+  await sweep.chain;
+  await solve();
+});
+
 // Shown photos at most this size: the full analysis size is only needed
 // once, by the worker. A 12 MP photo was held three times (canvas, pixels,
 // worker copy), and after a handful of photos the phone ended the app.
@@ -603,6 +748,7 @@ async function analyze(s, thenSolve) {
     const image = s.image ?? (await decode(s.file, SCENE_MAX)).image;
     s.image = null;
     r = await call('scene', { sceneId: s.id, image }, [image.data.buffer]);
+    for (const x of state.scenes) if (!x.busy || x === s) x.placed = r.placed.includes(x.id);
     s.busy = false;
     s.error = null;
   } catch (err) {
@@ -670,6 +816,12 @@ function renderThumbs() {
       const o = document.createElement('div');
       o.className = 'busy';
       o.textContent = '…';
+      b.append(o);
+    } else if (s.placed === false) {
+      // Neither the finished part nor an overlap with another photo.
+      const o = document.createElement('span');
+      o.className = 'unplaced';
+      o.textContent = 'nicht eingeordnet';
       b.append(o);
     }
     const x = document.createElement('button');
@@ -983,7 +1135,7 @@ function drawGapTile(cv, row, col) {
   const q = t && cellQuad(t, row * state.cols + col);
   if (!q) {
     drawCellTile(cv, row, col);
-    if (!t && !tableAsked && state.result?.scenes.some((x) => x.board)) {
+    if (!t && !tableAsked && state.result?.scenes.some((x) => x.view)) {
       tableAsked = true;
       tableImage()
         .then(() => renderSteps())
@@ -1387,7 +1539,8 @@ function renderResult() {
   const cv = $('viewer');
   // Several photos with the puzzle: the table from above unless the user
   // chose otherwise.
-  const boards = state.result.scenes.filter((x) => x.board).length;
+  // Photos laid onto the table: by the finished part or onto another photo.
+  const boards = state.result.scenes.filter((x) => x.view).length;
   if (!state.tableChosen && boards >= 2) state.table = true;
   if (!boards) state.table = false;
   if (state.table && !state.tableImg) {
@@ -1562,7 +1715,7 @@ function drawOverlay(g, cur, table = false) {
     if (f.sceneId === cur.s.id) drawFocus(g, cur.info, f, px);
     return;
   }
-  drawArrows(g, sugg, cur.info.board, px);
+  drawArrows(g, sugg, cur.info.view, px);
 }
 
 function drawArrows(g, sugg, board, px) {
@@ -1586,9 +1739,9 @@ function drawFocus(g, info, c, px) {
   g.strokeStyle = '#4fb3ff';
   g.lineWidth = 5 * px;
   g.stroke();
-  if (c.target && info.board) {
+  if (c.target && info.view) {
     arrow(g, c.center, c.target, '#4fb3ff', px);
-    targetMarker(g, { ...c, level: 'ok' }, info.board, px);
+    targetMarker(g, { ...c, level: 'ok' }, info.view, px);
   }
   badge(g, c.center, c, px);
 }

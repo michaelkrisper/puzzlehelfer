@@ -12,6 +12,7 @@ importScripts(
   'core/knn.js',
   'core/gpu.js',
   'core/feature.js',
+  'core/stitch.js',
   'core/pipeline.js',
 );
 
@@ -26,6 +27,35 @@ let ref = null;
 let refQuad = null;
 const scenes = new Map(); // id → result of analyzeScene
 const previews = new Map(); // id → photo at most 2400 px, for the table view
+const points = new Map(); // id → ORB points, to lay photos onto each other
+
+// The placed photo a photo overlaps best (most common points), or null.
+function overlapOf(id) {
+  let best = null;
+  for (const [oid, o] of scenes) {
+    if (oid === id || !o.view || !points.has(oid)) continue;
+    const m = PH.stitch.match(cv, points.get(id), points.get(oid));
+    if (m && (!best || m.inliers > best.inliers)) best = { ...m, o };
+  }
+  return best;
+}
+
+// Photos without the finished part onto one they overlap (core/stitch.js),
+// repeated while one more finds its place: a close-up of a tray taken
+// before the overview gets its place with the overview.
+function placeAll() {
+  let more = true;
+  while (more) {
+    more = false;
+    for (const [id, s] of scenes) {
+      if (s.view || !points.has(id)) continue;
+      const best = overlapOf(id);
+      if (!best) continue;
+      PH.pipeline.placeScene(s, PH.geom.mulH(best.o.view.Hi, best.H));
+      more = true;
+    }
+  }
+}
 
 function shrink(image, max) {
   const f = Math.min(1, max / Math.max(image.width, image.height));
@@ -88,6 +118,7 @@ const handlers = {
     // Places depend on the grid, so old analyses no longer fit.
     scenes.clear();
     previews.clear();
+    points.clear();
     // New feature points go back to the app, which stores them.
     const fresh = ref.feat !== prev?.feat ? { key: ref.key, feat: ref.feat } : null;
     // Finer copy for the views, which can be zoomed.
@@ -100,10 +131,14 @@ const handlers = {
     const s = PH.pipeline.analyzeScene(cv, image, ref, progressFor(id));
     scenes.set(sceneId, s);
     previews.set(sceneId, shrink(image, 2400));
+    points.set(sceneId, PH.stitch.describe(cv, image, s.scale));
+    placeAll();
     return {
       pieces: s.pieces.length,
       unclear: s.unclear.length,
       board: !!s.board,
+      // Photos laid onto the table so far (one more may have found its place).
+      placed: [...scenes].filter(([, x]) => x.view).map(([k]) => k),
       border: s.board?.border ?? null,
       aspect: ref.hi.w / ref.hi.h,
       seams: seamQuad(s.board?.seams),
@@ -124,11 +159,13 @@ const handlers = {
   removeScene({ sceneId }) {
     scenes.delete(sceneId);
     previews.delete(sceneId);
+    points.delete(sceneId);
     return {};
   },
   clearScenes() {
     scenes.clear();
     previews.clear();
+    points.clear();
     return {};
   },
   solve({ id, placed = [], removed = [], nofit = [], cells = [], crop = null }) {
@@ -159,6 +196,7 @@ const handlers = {
           width: s.width,
           height: s.height,
           board: s.board ? { H: s.board.H, filled: s.board.filled } : null,
+          view: s.view ? { H: s.view.H } : null,
           unclear: s.unclear,
           groups: s.groups,
           pieces: s.pieces.map((p) => ({ outline: p.outline, rgba: p.raw.rgba, P: p.raw.P })),

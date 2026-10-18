@@ -1,7 +1,7 @@
 // Precache everything; after that the app needs no network.
 // Bump VERSION whenever any of these files changes, together with
 // APP_VERSION in app.js (shown in the header).
-const VERSION = 'v38';
+const VERSION = 'v39';
 const FILES = [
   './',
   'index.html',
@@ -18,6 +18,7 @@ const FILES = [
   'core/knn.js',
   'core/gpu.js',
   'core/feature.js',
+  'core/stitch.js',
   'core/pipeline.js',
   'vendor/opencv.js',
   'manifest.webmanifest',

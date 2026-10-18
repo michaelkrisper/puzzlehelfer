@@ -22,6 +22,7 @@ export async function loadCore() {
     'board',
     'knn',
     'feature',
+    'stitch',
     'pipeline',
   ])
     require(join(root, `core/${f}.js`));
