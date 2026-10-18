@@ -385,7 +385,7 @@
         // the seams a piece covers well over half of the middle, a gap with
         // knobs reaching in well under half.
         let f = fraction(mask, W, (c + 0.3) * C, (r + 0.3) * C, (c + 0.7) * C, (r + 0.7) * C, true);
-        if (f > 0.1 && f <= 0.5 && cellNcc(sg, rg, W, c, r, C) > 0.6) f = 1;
+        if (f > 0.25 && f <= 0.5 && cellNcc(sg, rg, W, c, r, C) > 0.6) f = 1;
         if (f > 0.5) {
           isFilled[r * cols + c] = 1;
           filled.push(r * cols + c);

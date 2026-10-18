@@ -573,12 +573,16 @@ def choose_filled(cols, rows, frac, rng):
 
 
 def board_quad(w, h, k, scene_w, scene_h, rng, margin=30):
-    """Pose of the assembled puzzle: rotation up to 20 degrees, slight perspective, pushed to one side."""
+    """Pose of the assembled puzzle: rotation up to 20 degrees, pushed to one side."""
     s = 1.0
     while True:
         for _ in range(60):
             bw, bh = w * k * s / 2, h * k * s / 2
-            t1, t2 = rng.uniform(-0.06, 0.06, 2)
+            # The loose pieces lie flat in the photo, so the finished part gets
+            # no perspective either: one plane, as on a real table. The draw
+            # keeps the random stream of the test scenes.
+            rng.uniform(-0.06, 0.06, 2)
+            t1 = t2 = 0.0
             local = np.array(
                 [
                     [-bw * (1 - t1), -bh * (1 - t2)],
