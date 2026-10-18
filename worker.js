@@ -172,7 +172,9 @@ self.onmessage = async (e) => {
   const { id, type } = e.data;
   await ready;
   try {
-    postMessage({ type: 'result', id, data: handlers[type](e.data) });
+    const data = handlers[type](e.data);
+    // The table picture (up to 48 MB) goes over without a copy.
+    postMessage({ type: 'result', id, data }, type === 'table' ? [data.rgba.buffer] : []);
   } catch (err) {
     console.error(err);
     postMessage({ type: 'error', id, message: String(err?.message ?? err) });

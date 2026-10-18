@@ -5,7 +5,7 @@ const REF_MAX = 2400;
 const SCENE_MAX = 4000;
 const COUNTS = [100, 200, 300, 500, 1000, 1500, 2000];
 // Same as VERSION in sw.js; bump both together.
-const APP_VERSION = 'v35';
+const APP_VERSION = 'v36';
 const ARROWS = 6;
 const $ = (id) => document.getElementById(id);
 
@@ -33,11 +33,12 @@ worker.onmessage = (e) => {
 worker.onerror = (e) => {
   $('engine').textContent = `Fehler: ${e.message ?? 'Bilderkennung lädt nicht'}`;
 };
-function call(type, payload = {}) {
+// transfer: buffers handed over without a copy (gone here afterwards).
+function call(type, payload = {}, transfer = []) {
   const id = nextId++;
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject });
-    worker.postMessage({ id, type, ...payload });
+    worker.postMessage({ id, type, ...payload }, transfer);
   });
 }
 
@@ -558,12 +559,30 @@ for (const input of document.querySelectorAll('input[data-scene]')) {
   });
 }
 
+// Shown photos at most this size: the full analysis size is only needed
+// once, by the worker. A 12 MP photo was held three times (canvas, pixels,
+// worker copy), and after a handful of photos the phone ended the app.
+const VIEW_MAX = 2400;
+
+function smaller(canvas, max) {
+  const f = Math.min(1, max / Math.max(canvas.width, canvas.height));
+  if (f === 1) return canvas;
+  const c = document.createElement('canvas');
+  c.width = Math.round(canvas.width * f);
+  c.height = Math.round(canvas.height * f);
+  c.getContext('2d').drawImage(canvas, 0, 0, c.width, c.height);
+  canvas.width = 0;
+  canvas.height = 0;
+  return c;
+}
+
 async function addScene(file, thenSolve = true) {
   const { canvas, image, full } = await decode(file, SCENE_MAX);
   const s = {
     id: sceneSeq++,
-    canvas,
+    canvas: smaller(canvas, VIEW_MAX),
     image,
+    file,
     full,
     name: file.name,
     url: URL.createObjectURL(file),
@@ -580,7 +599,10 @@ async function analyze(s, thenSolve) {
   state.tableImg = null;
   let r = null;
   try {
-    r = await call('scene', { sceneId: s.id, image: s.image });
+    // Pixels only for this call; a new analysis (new grid) decodes again.
+    const image = s.image ?? (await decode(s.file, SCENE_MAX)).image;
+    s.image = null;
+    r = await call('scene', { sceneId: s.id, image }, [image.data.buffer]);
     s.busy = false;
     s.error = null;
   } catch (err) {
@@ -765,7 +787,7 @@ async function tableImage() {
   const c = document.createElement('canvas');
   c.width = r.w;
   c.height = r.h;
-  c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(r.rgba), r.w, r.h), 0, 0);
+  c.getContext('2d').putImageData(new ImageData(r.rgba, r.w, r.h), 0, 0);
   const M = new Map(r.views.map((v) => [v.sceneId, { M: v.M, Mi: invertH(v.M) }]));
   state.tableImg = { canvas: c, width: r.w, height: r.h, x0: r.x0, y0: r.y0, f: r.f, M, corners: r.corners };
   setStatus('');

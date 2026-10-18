@@ -50,24 +50,70 @@
   }
 
   // Reference features: grey image in the true aspect ratio (ref.hi).
+  // In tiles: SIFT first doubles the image and keeps a pyramid of float
+  // copies, on the 2400 px reference about 700 MB of WebAssembly memory that
+  // the phone never gets back (the app was killed after a few photos). Each
+  // tile is read with a margin, so points at its border see their whole
+  // neighbourhood; a tile keeps the points of its own area.
+  const REF_TILE = 800;
+  const PAD = 64;
   function describeReference(cv, hi) {
-    const g = new cv.Mat(hi.h, hi.w, cv.CV_8UC1);
-    g.data.set(hi.gray);
-    const sets = detect(cv, g, null, true);
-    g.delete();
+    const total = Math.max(8000, Math.round((hi.w * hi.h) / 120));
+    const acc = new Map();
+    for (let y0 = 0; y0 < hi.h; y0 += REF_TILE) {
+      for (let x0 = 0; x0 < hi.w; x0 += REF_TILE) {
+        const x1 = Math.min(hi.w, x0 + REF_TILE);
+        const y1 = Math.min(hi.h, y0 + REF_TILE);
+        const ax = Math.max(0, x0 - PAD);
+        const ay = Math.max(0, y0 - PAD);
+        const w = Math.min(hi.w, x1 + PAD) - ax;
+        const h = Math.min(hi.h, y1 + PAD) - ay;
+        const g = new cv.Mat(h, w, cv.CV_8UC1);
+        for (let r = 0; r < h; r++)
+          g.data.set(hi.gray.subarray((ay + r) * hi.w + ax, (ay + r) * hi.w + ax + w), r * w);
+        const cap = Math.max(1, Math.round((total * (x1 - x0) * (y1 - y0)) / (hi.w * hi.h)));
+        for (const s of detect(cv, g, null, true, null, cap)) {
+          const a = acc.get(s.name) ?? {
+            name: s.name,
+            norm: s.norm,
+            pts: [],
+            rows: [],
+            cols: 0,
+            type: s.desc.type(),
+          };
+          acc.set(s.name, a);
+          if (s.desc.cols) {
+            a.cols = s.desc.cols;
+            a.type = s.desc.type();
+          }
+          const data = s.desc.type() === cv.CV_32F ? s.desc.data32F : s.desc.data;
+          const step = s.desc.cols;
+          for (let i = 0; i < s.pts.length / 2; i++) {
+            const x = s.pts[i * 2] + ax;
+            const y = s.pts[i * 2 + 1] + ay;
+            if (x < x0 || x >= x1 || y < y0 || y >= y1) continue;
+            a.pts.push(x, y);
+            a.rows.push(data.slice(i * step, (i + 1) * step));
+          }
+          s.desc.delete();
+        }
+        g.delete();
+      }
+    }
     // Descriptors as typed arrays: Mats do not survive being passed around.
-    return sets.map((s) => {
-      const r = {
-        name: s.name,
-        norm: s.norm,
-        pts: s.pts,
-        rows: s.desc.rows,
-        cols: s.desc.cols,
-        type: s.desc.type(),
-        data: s.desc.type() === cv.CV_32F ? Float32Array.from(s.desc.data32F) : Uint8Array.from(s.desc.data),
+    return [...acc.values()].map((a) => {
+      const Arr = a.type === cv.CV_32F ? Float32Array : Uint8Array;
+      const data = new Arr(a.rows.length * a.cols);
+      for (const [i, row] of a.rows.entries()) data.set(row, i * a.cols);
+      return {
+        name: a.name,
+        norm: a.norm,
+        pts: Float32Array.from(a.pts),
+        rows: a.rows.length,
+        cols: a.cols,
+        type: a.type,
+        data,
       };
-      s.desc.delete();
-      return r;
     });
   }
 
@@ -146,15 +192,16 @@
     };
   }
 
-  // Large photos (above 4 MP) in overlapping tiles: SIFT doubles the image
-  // internally, a 2800 × 2800 photo then no longer fits into the WASM memory. A point is
-  // kept by the tile whose core holds it; the overlap is wider than a piece.
-  const TILE = 1600;
+  // Photos in overlapping tiles: SIFT doubles the image internally and keeps
+  // about 230 bytes per pixel, which WebAssembly never gives back (1600 px
+  // tiles held 600 MB). A point is kept by the tile whose core holds it; the
+  // overlap is wider than a piece.
+  const TILE = 1000;
   const OVERLAP = 160;
   function detectTiled(cv, gray, mask) {
     const W = gray.cols;
     const H = gray.rows;
-    if (W * H <= 4e6) return detect(cv, gray, mask);
+    if (W * H <= TILE * TILE) return detect(cv, gray, mask);
     const starts = (n) => {
       const k = Math.ceil((n - OVERLAP) / (TILE - OVERLAP));
       const step = (n - TILE) / Math.max(1, k - 1);

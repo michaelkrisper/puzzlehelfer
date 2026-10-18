@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Much less memory: the app was ended by the phone after a handful of
+  photos. Feature points of the reference are found in tiles (SIFT doubles
+  the picture inside and kept about 700 MB of WebAssembly memory, which is
+  never given back), photos in smaller tiles; after the reference and two
+  photos 280 MB instead of 1070 MB, same results. A photo's pixels go to
+  the worker without a copy and are not kept afterwards (a new grid decodes
+  the photo again), photos are shown at 2400 px, the table picture comes
+  over without a copy.
+
 - Gap rims grow inward: a piece put in with "Passt" lends its own outline,
   laid into its place, as the rim of its free neighbours, so a hole is
   filled from its border to the middle without a new photo. In the last
