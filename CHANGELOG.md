@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The step card fits one try on one screen: the gap as the photo shows it
+  (the real rim, not the reference picture) next to the piece cut from the
+  photo, turned as it goes in and at the same scale with its knobs whole,
+  and below where the piece lies on the table, ringed. Candidate places in
+  "Nach Teil" show the real gaps too. Big buttons; the list of all pieces
+  and the map are folded away.
+
 - Much less memory: the app was ended by the phone after a handful of
   photos. Feature points of the reference are found in tiles (SIFT doubles
   the picture inside and kept about 700 MB of WebAssembly memory, which is

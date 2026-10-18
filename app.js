@@ -5,7 +5,7 @@ const REF_MAX = 2400;
 const SCENE_MAX = 4000;
 const COUNTS = [100, 200, 300, 500, 1000, 1500, 2000];
 // Same as VERSION in sw.js; bump both together.
-const APP_VERSION = 'v36';
+const APP_VERSION = 'v37';
 const ARROWS = 6;
 const $ = (id) => document.getElementById(id);
 
@@ -896,21 +896,142 @@ function candsOf(x) {
 }
 
 // The piece turned as it goes in (patch rotated by the candidate's rot).
-function drawPieceTile(cv, x, rot) {
+// span: places across the tile (the patch is one place plus its margin);
+// the gap tile uses the same, so piece and gap compare at one scale.
+function drawPieceTile(cv, x, rot, span = 0) {
   const info = state.result.scenes.find((s) => s.id === x.sceneId);
   const p = info?.pieces[x.index];
   const g = cv.getContext('2d');
   g.fillStyle = '#0b1016';
   g.fillRect(0, 0, cv.width, cv.height);
   if (!p) return;
+  const sc = state.scenes.find((v) => v.id === x.sceneId);
+  if (span && sc && p.outline && x.corners) {
+    // Straight from the photo, its corners laid onto the place's corners:
+    // knobs whole, the surroundings dimmed.
+    const k = sc.canvas.width / info.width;
+    const L = cv.width / span;
+    const place = [
+      [-1, -1],
+      [1, -1],
+      [1, 1],
+      [-1, 1],
+    ].map(([u, v]) => [cv.width / 2 + (u * L) / 2, cv.height / 2 + (v * L) / 2]);
+    const src = x.corners.map(([u, v]) => [u * k, v * k]);
+    const T = similarity(
+      src,
+      src.map((_, i) => place[(i + (rot ?? 0)) % 4]),
+    );
+    g.save();
+    g.setTransform(T.a, T.b, -T.b, T.a, T.e, T.f);
+    g.globalAlpha = 0.3;
+    g.drawImage(sc.canvas, 0, 0);
+    g.globalAlpha = 1;
+    g.beginPath();
+    for (const [u, v] of p.outline) g.lineTo(u * k, v * k);
+    g.closePath();
+    g.clip();
+    g.drawImage(sc.canvas, 0, 0);
+    g.restore();
+    return;
+  }
   const tile = document.createElement('canvas');
   tile.width = tile.height = p.P;
   tile.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(p.rgba), p.P, p.P), 0, 0);
+  const size = span ? (cv.width * p.P) / state.refView.C / span : cv.width;
   g.save();
   g.translate(cv.width / 2, cv.height / 2);
   g.rotate(((rot ?? 0) * Math.PI) / 2);
-  g.drawImage(tile, -cv.width / 2, -cv.height / 2, cv.width, cv.height);
+  g.drawImage(tile, -size / 2, -size / 2, size, size);
   g.restore();
+}
+
+// Turn, scale and shift taking the points src closest onto dst (least
+// squares): x' = a·x − b·y + e, y' = b·x + a·y + f.
+function similarity(src, dst) {
+  const n = src.length;
+  const mean = (l, a) => l.reduce((t, v) => t + v[a], 0) / n;
+  const [sx, sy, dx, dy] = [mean(src, 0), mean(src, 1), mean(dst, 0), mean(dst, 1)];
+  let ss = 0;
+  let dot = 0;
+  let cross = 0;
+  for (let i = 0; i < n; i++) {
+    const px = src[i][0] - sx;
+    const py = src[i][1] - sy;
+    const qx = dst[i][0] - dx;
+    const qy = dst[i][1] - dy;
+    ss += px * px + py * py;
+    dot += px * qx + py * qy;
+    cross += px * qy - py * qx;
+  }
+  const a = dot / ss;
+  const b = cross / ss;
+  return { a, b, e: dx - (a * sx - b * sy), f: dy - (b * sx + a * sy) };
+}
+
+// Places across the gap and piece tiles.
+const SPAN = 2.2;
+
+// The place as the photos show it from above: the real gap with the edges
+// of its neighbours, upright as in the reference. The reference picture
+// while the table picture is being put together.
+let tableAsked = false;
+function drawGapTile(cv, row, col) {
+  const t = state.tableImg;
+  const q = t && cellQuad(t, row * state.cols + col);
+  if (!q) {
+    drawCellTile(cv, row, col);
+    if (!t && !tableAsked && state.result?.scenes.some((x) => x.board)) {
+      tableAsked = true;
+      tableImage()
+        .then(() => renderSteps())
+        .catch(() => {});
+    }
+    return;
+  }
+  const cx = q.reduce((a, v) => a + v[0], 0) / 4;
+  const cy = q.reduce((a, v) => a + v[1], 0) / 4;
+  const side =
+    (Math.hypot(q[1][0] - q[0][0], q[1][1] - q[0][1]) + Math.hypot(q[3][0] - q[0][0], q[3][1] - q[0][1])) / 2;
+  const half = (side * SPAN) / 2;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#0b1016';
+  g.fillRect(0, 0, cv.width, cv.height);
+  g.drawImage(t.canvas, cx - half, cy - half, 2 * half, 2 * half, 0, 0, cv.width, cv.height);
+  const k = cv.width / (2 * half);
+  g.strokeStyle = '#4fb3ffaa';
+  g.lineWidth = 2;
+  g.setLineDash([6, 5]);
+  g.beginPath();
+  for (const [x, y] of q) g.lineTo((x - cx + half) * k, (y - cy + half) * k);
+  g.closePath();
+  g.stroke();
+  g.setLineDash([]);
+}
+
+// Where the piece lies: the photo around it, the piece ringed, so it is
+// found on the table at a glance.
+function drawWhere(cv, x) {
+  const s = state.scenes.find((v) => v.id === x.sceneId);
+  const info = state.result.scenes.find((v) => v.id === x.sceneId);
+  const g = cv.getContext('2d');
+  g.fillStyle = '#0b1016';
+  g.fillRect(0, 0, cv.width, cv.height);
+  if (!s || !info || !x.center) return;
+  const k = s.canvas.width / info.width;
+  const [a, b] = x.corners ?? [x.center, [x.center[0] + 40, x.center[1]]];
+  const side = Math.max(8, Math.hypot(b[0] - a[0], b[1] - a[1])) * k;
+  const w = side * 9;
+  const h = (w * cv.height) / cv.width;
+  const cx = x.center[0] * k;
+  const cy = x.center[1] * k;
+  g.drawImage(s.canvas, cx - w / 2, cy - h / 2, w, h, 0, 0, cv.width, cv.height);
+  const f = cv.width / w;
+  g.strokeStyle = '#4fb3ff';
+  g.lineWidth = 4;
+  g.beginPath();
+  g.arc(cv.width / 2, cv.height / 2, side * 0.95 * f, 0, Math.PI * 2);
+  g.stroke();
 }
 
 function drawCellTile(cv, row, col) {
@@ -989,7 +1110,11 @@ function renderPieceStep() {
   $('step-title').textContent = `Teil ${x.label}`;
   $('step-sub').textContent =
     `${n} von ${q.length}${state.skipped.has(keyOf(x)) ? ' · übersprungen' : ''} · ${Math.round(x.conf * 100)} %`;
-  drawPieceTile($('step-piece'), x, c.rot);
+  drawPieceTile($('step-a'), x, c.rot, SPAN);
+  $('step-a-cap').textContent = `Teil ${x.label}, so gedreht`;
+  drawGapTile($('step-b'), c.row, c.col);
+  $('step-b-cap').textContent = `R${c.row + 1} S${c.col + 1} · ${Math.round((c.p ?? 0) * 100)} %`;
+  drawWhere($('step-where'), x);
   const box = $('step-cands');
   box.replaceChildren();
   cands.forEach((a, i) => {
@@ -997,8 +1122,8 @@ function renderPieceStep() {
     b.type = 'button';
     b.className = `cand${i === alt ? ' on' : ''}`;
     const cv = document.createElement('canvas');
-    cv.width = cv.height = 144;
-    drawCellTile(cv, a.row, a.col);
+    cv.width = cv.height = 112;
+    drawGapTile(cv, a.row, a.col);
     const t = document.createElement('span');
     t.textContent = `R${a.row + 1} S${a.col + 1} · ${Math.round((a.p ?? 0) * 100)} %`;
     b.append(cv, t);
@@ -1028,7 +1153,11 @@ function renderGapStep() {
   $('step-title').textContent = `Lücke R${g.row + 1} S${g.col + 1}`;
   $('step-sub').textContent =
     `${n} von ${q.length}${state.skippedGaps.has(g.cell) ? ' · übersprungen' : ''} · ${g.sides} fertige Nachbarn`;
-  drawCellTile($('step-piece'), g.row, g.col);
+  drawGapTile($('step-a'), g.row, g.col);
+  $('step-a-cap').textContent = 'Lücke';
+  drawPieceTile($('step-b'), c, c.rot, SPAN);
+  $('step-b-cap').textContent = `Teil ${alt + 1}, so gedreht · ${Math.round(c.p * 100)} %`;
+  drawWhere($('step-where'), c);
   const box = $('step-cands');
   box.replaceChildren();
   g.cands.forEach((a, i) => {
@@ -1036,7 +1165,7 @@ function renderGapStep() {
     b.type = 'button';
     b.className = `cand${i === alt ? ' on' : ''}`;
     const cv = document.createElement('canvas');
-    cv.width = cv.height = 144;
+    cv.width = cv.height = 112;
     drawPieceTile(cv, a, a.rot);
     const t = document.createElement('span');
     t.textContent = `Teil ${i + 1} · ${Math.round(a.p * 100)} %`;
@@ -1047,7 +1176,8 @@ function renderGapStep() {
     });
     box.append(b);
   });
-  $('step-text').textContent = `Teil ${alt + 1} (Pfeil im Foto) hier probieren. ${turnText(c.turn)}`;
+  $('step-text').textContent =
+    `Teil ${alt + 1} (Ring unten, Pfeil im Foto) hier probieren. ${turnText(c.turn)}`;
 }
 
 $('mode-gap').addEventListener('click', () => {
@@ -2044,6 +2174,9 @@ function zoomable(cv) {
 }
 zoomable($('ref-canvas'));
 zoomable($('map'));
+$('map-box').addEventListener('toggle', () => {
+  if (state.result) drawMap();
+});
 
 // ---------- Start ----------
 (async () => {

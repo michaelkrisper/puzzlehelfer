@@ -52,9 +52,13 @@ the percentage. An honest low percentage is better than a wrong "sure".
 At the end, with plain pieces and a finished part around the gaps, the card
 works **by gap** ("Nach Lücke"): a gap with two or three finished
 neighbours and the three pieces whose outline fits it best, the clearest
-gaps first. Try them in turn: **Passt** puts the piece in, **Passt nicht**
-rules that piece out at that gap. "Nach Teil" switches back to one piece
-with its places. Every "Passt" / "Passt nicht" is kept on the phone;
+gaps first. The card shows the gap as the photo sees it next to the piece,
+cut from the photo and already turned as it goes in, at the same scale, and
+below where the piece lies on the table (ringed): one try fits one screen,
+without zooming. Try them in turn: **Passt** puts the piece in, **Passt
+nicht** rules that piece out at that gap. A piece put in lends its outline
+as the rim of its free neighbours, so a hole fills from its border inward.
+"Nach Teil" switches back to one piece with its places. Every "Passt" / "Passt nicht" is kept on the phone;
 **Versuche exportieren** saves them as JSON (photo name, piece position,
 place, rotation, result) to check and improve the recognition with real
 solutions.

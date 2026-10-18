@@ -421,24 +421,63 @@ dialog h3 {
   margin-bottom: 0.5rem;
 }
 
-.step-body {
-  display: flex;
-  gap: 0.6rem;
-  align-items: flex-start;
+/* Gap and piece side by side at the same scale, where the piece lies below:
+   everything for one try on one screen, no zooming. */
+.step-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
 }
 
-#step-piece {
-  width: 120px;
-  height: 120px;
+.step figure {
+  margin: 0;
+}
+
+.step figcaption {
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-align: center;
+  margin-top: 2px;
+}
+
+.step-pair canvas,
+.step-where canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
   border-radius: 8px;
   background: #0b1016;
-  flex: none;
+}
+
+.step figure.step-where {
+  margin-top: 0.5rem;
+}
+
+.step-where canvas {
+  aspect-ratio: 2;
+}
+
+.step-buttons .btn {
+  flex: 1 1 auto;
+  min-height: 3rem;
+  font-size: 1.05rem;
+}
+
+details.more {
+  margin: 0.8rem 0;
+}
+
+details.more summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0.4rem 0;
 }
 
 .cands {
   display: flex;
   gap: 0.4rem;
   flex-wrap: wrap;
+  margin-top: 0.5rem;
 }
 
 .cand {
@@ -455,8 +494,8 @@ dialog h3 {
 }
 
 .cand canvas {
-  width: 72px;
-  height: 72px;
+  width: 56px;
+  height: 56px;
   border-radius: 6px;
 }
 

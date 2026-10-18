@@ -87,12 +87,17 @@
           </div>
           <div id="step" class="step" hidden>
             <div class="step-head"><b id="step-title"></b><span id="step-sub" class="muted"></span></div>
-            <div class="step-body">
-              <canvas id="step-piece" width="120" height="120"></canvas>
-              <div id="step-cands" class="cands"></div>
+            <div class="step-pair">
+              <figure><canvas id="step-a" width="360" height="360"></canvas><figcaption id="step-a-cap"></figcaption></figure>
+              <figure><canvas id="step-b" width="360" height="360"></canvas><figcaption id="step-b-cap"></figcaption></figure>
             </div>
+            <div id="step-cands" class="cands"></div>
+            <figure class="step-where">
+              <canvas id="step-where" width="720" height="360"></canvas>
+              <figcaption>Hier liegt das Teil</figcaption>
+            </figure>
             <p id="step-text" class="step-text"></p>
-            <div class="row">
+            <div class="row step-buttons">
               <button type="button" class="btn primary" id="step-placed">Passt</button>
               <button type="button" class="btn" id="step-nofit">Passt nicht</button>
               <button type="button" class="btn" id="step-skip">Überspringen</button>
@@ -114,10 +119,14 @@
             <button type="button" class="btn small" id="table-edit" hidden>Korrigieren</button>
             <button type="button" class="btn small" id="undo-placed" hidden>Rückgängig</button>
           </div>
-          <h3>Alle gefundenen Teile</h3>
-          <div id="piece-list" class="piece-list"></div>
-          <h3>Plätze im Bild</h3>
-          <div class="ref-view"><canvas id="map"></canvas></div>
+          <details class="more">
+            <summary>Alle gefundenen Teile</summary>
+            <div id="piece-list" class="piece-list"></div>
+          </details>
+          <details class="more" id="map-box">
+            <summary>Plätze im Bild</summary>
+            <div class="ref-view"><canvas id="map"></canvas></div>
+          </details>
           <div class="row">
             <button type="button" class="btn" id="new-round">Neue Runde (nach dem Einsetzen)</button>
             <button type="button" class="btn" id="export-attempts" hidden>Versuche exportieren</button>
