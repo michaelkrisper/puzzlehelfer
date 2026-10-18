@@ -618,7 +618,7 @@
   }
 
   // Outline fit (core/fit.js) of a piece against every gap rim it may go
-  // into: "cell,rot" → mean rim distance in places. Kept on the piece and on
+  // into: "cell,rot" → fit (mean rim distance e, residuals r). Kept on the piece and on
   // the rim, so later searches (after "Eingesetzt") reuse them.
   function outlineFits(it, rims, fits, ref) {
     const p = it.piece;
@@ -634,7 +634,7 @@
       }
       for (let rot = 0; rot < 4; rot++) {
         if (fits && !fits(cell, rot)) continue;
-        done[rot] ??= PH.fit.fitPiece(p.fitPrep, G, rot, ref.C).e;
+        done[rot] ??= PH.fit.fitPiece(p.fitPrep, G, rot, ref.C);
         out.set(`${cell},${rot}`, done[rot]);
       }
     }
@@ -679,27 +679,62 @@
   }
 
   function runAssign(items, ref, colors, ctx, progress) {
+    // Plain-coloured pieces: the colour alone puts the right place far down,
+    // so only places where knobs and holes fit are compared.
+    const typeOk = (it) => (ctx.gaps ? (cell, rot) => !gapFit(it.sides, { cell, rot }, ctx.gaps).bad : null);
+    // Outlines laid into the gaps first: how telling a fit is depends on how
+    // well all the other pieces fit there.
+    if (ctx.rims?.size) progress('Umrisse werden in die Lücken gelegt …');
+    const evidence = ctx.rims?.size ? outlineEvidence(items, ctx.rims, typeOk, ref) : [];
     for (const [n, it] of items.entries()) {
       if (n % 10 === 0) progress(`Vergleich mit der Vorlage: Teil ${n + 1} von ${items.length} …`);
       it.prep = PH.match.preparePiece(it.raw, ref.C, ref.G, colors[it.scene]);
       it.prep.allowRot = allowedRots(it.shape, ref);
       it.prep.strictBorder = !it.split && clearSides(it.shape);
       const must = it.feat && it.feat.rot !== null ? [it.feat] : [];
-      // Plain-coloured pieces: the colour alone puts the right place far
-      // down, so only places where knobs and holes fit are compared.
-      const fits = ctx.gaps ? (cell, rot) => !gapFit(it.sides, { cell, rot }, ctx.gaps).bad : null;
-      // The whole outline laid into each gap of the finished part; the best
-      // fits are compared with the reference whatever the colour says.
-      const fit = ctx.rims && outlineFits(it, ctx.rims, fits, ref);
-      if (fit)
-        for (const [key] of [...fit].sort((a, b) => a[1] - b[1]).slice(0, 12)) {
+      const fits = typeOk(it);
+      // The most telling fits are compared with the reference whatever the
+      // colour says.
+      const L = evidence[n];
+      if (L)
+        for (const [key] of [...L].sort((a, b) => b[1] - a[1]).slice(0, 12)) {
           const [cell, rot] = key.split(',').map(Number);
           if (!must.some((m) => m.cell === cell && m.rot === rot)) must.push({ cell, rot });
         }
       it.cands = PH.match.candidates(it.prep, it.sides, ref, ctx.free, must, fits);
-      if (fit) for (const cd of it.cands) cd.fit = fit.get(`${cd.cell},${cd.rot}`);
+      if (L) for (const cd of it.cands) cd.fit = L.get(`${cd.cell},${cd.rot}`);
     }
     return PH.match.assign(items, ref, { filled: ctx.filled, holes: ctx.holes, unknown: ctx.unknown });
+  }
+
+  // Per piece "cell,rot" → log likelihood ratio of its outline fit in that
+  // gap against the other pieces (PH.fit.evidence), null without outline.
+  function outlineEvidence(items, rims, typeOk, ref) {
+    const fits = items.map((it) => outlineFits(it, rims, typeOk(it), ref));
+    const out = items.map(() => null);
+    for (const [cell] of rims) {
+      const best = [];
+      for (const m of fits) {
+        let b = null;
+        for (let rot = 0; rot < 4; rot++) {
+          const f = m?.get(`${cell},${rot}`);
+          if (f && (!b || f.e < b.e)) b = f;
+        }
+        if (b) best.push(b.r);
+      }
+      if (best.length < 3) continue;
+      const ev = PH.fit.evidence(best);
+      fits.forEach((m, k) => {
+        for (let rot = 0; rot < 4; rot++) {
+          const f = m?.get(`${cell},${rot}`);
+          if (f) {
+            out[k] ??= new Map();
+            out[k].set(`${cell},${rot}`, ev(f.r));
+          }
+        }
+      });
+    }
+    return out;
   }
 
   // The same piece in two photos (e.g. overview and close-up): if both show
@@ -909,7 +944,15 @@
       });
     });
     const dup = findDuplicates(items, ref, scenes);
-    const active = items.filter((_, i) => !dup.has(i));
+    const rims = atEdge ? gapRims(ref, scenes, free, filled) : null;
+    // With gap rims to lay outlines into, pieces from photos without the
+    // finished part have no outline on the table: colour and side profiles
+    // alone put plain pieces anywhere (6 of 7 wrong at the table), so they
+    // get no place.
+    const active = items.filter((it, i) => !dup.has(i) && (!rims?.size || it.piece.plane));
+    // A place next to the finished part without a rim to compare (dark
+    // pieces read as table there) is not suggested either.
+    if (rims?.size) for (let c = 0; c < N; c++) if (free[c] && !rims.has(c)) free[c] = 0;
     const stats = statsColor(active, ref);
     const colors = scenes.map((s) => s.board?.color ?? stats);
     const ctx = {
@@ -917,7 +960,7 @@
       filled: [...filled],
       holes,
       gaps: atEdge ? gaps : null,
-      rims: atEdge ? gapRims(ref, scenes, free, filled) : null,
+      rims,
       // Places not filled and not next to the finished part (or not in the photo).
       unknown: atEdge ? N - filled.size - free.reduce((a, b) => a + b, 0) : 0,
     };

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Sorting trays (grey leather with sheen) next to the black mat: mat and
+  trays count together as table against a plain puzzle area at the photo
+  border, and the sheen no longer lets cream pieces pass as table. Tray
+  close-ups: 21, 15 and 18 pieces instead of 21, 2 and 1; an overview with
+  trays took over ten minutes, now 45 s.
+- At the end (gaps with rims), pieces from photos without a recognisable
+  finished part get no place: without an outline on the table only colour
+  and side profiles were left, and those put 6 of 7 top suggestions wrong
+  at the table. Places next to the finished part without a rim to compare
+  are not suggested either.
+- The outline fit counts how much better a piece fits than all the others
+  (a single knob matches many sky pieces, two or three sides tell them
+  apart), and percentages stay modest: the same piece on two photos often
+  prefers different places, so a fit alone is no certainty.
 - Plain pieces at the end are placed by their whole outline: each piece is
   laid into each gap of the finished part (turn and shift searched) and
   every point of the gap's rim must lie on the piece's outline. Corners and

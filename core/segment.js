@@ -161,15 +161,34 @@
       }
       for (let j = 0; j < all.length; j++) all[j].spread = acc[j][1] / Math.max(1, acc[j][0]);
       const score = (c) => c.weight / (1 + (c.spread / 5) ** 2);
+      // A table often comes in several shades of one hue (mat and sorting
+      // trays, light falloff): they count together against a plain puzzle
+      // area at the border, e.g. sky in the last plain pieces (cream sky
+      // 0.46 of the border against mat and trays 0.18 + 0.16 + 0.12).
+      const kin = (a, b) =>
+        Math.hypot(a.mean[1] - b.mean[1], a.mean[2] - b.mean[2]) < 6 &&
+        Math.abs(a.mean[0] - b.mean[0]) <= 30 &&
+        b.spread < 10;
+      const family = (c) => all.reduce((t, o) => t + (o === c || kin(c, o) ? score(o) : 0), 0);
       let base = 0;
-      for (let j = 1; j < all.length; j++) if (score(all[j]) > score(all[base])) base = j;
+      for (let j = 1; j < all.length; j++) {
+        const d = family(all[j]) - family(all[base]);
+        if (d > 1e-9 || (d > -1e-9 && score(all[j]) > score(all[base]))) base = j;
+      }
       all.unshift(...all.splice(base, 1));
     }
     const sameHue = (c) => Math.hypot(c.mean[1] - all[0].mean[1], c.mean[2] - all[0].mean[2]) < 6;
     // With the spread known, a further colour far off in lightness must be
     // plain too: on a black mat, white puzzle areas would otherwise pass as
     // brighter table (unevenly lit mat and wood grain stay).
-    const plain = (c) => c.spread === undefined || c.spread < 7 || Math.abs(c.mean[0] - all[0].mean[0]) <= 30;
+    // Clearly brighter colours must be as plain as the table itself: the
+    // sheen on leather trays is, cream pieces in its light are not (spread
+    // 10.3 and 18.6 against 7.9).
+    const plain = (c) =>
+      c.spread === undefined ||
+      c.spread < 7 ||
+      (Math.abs(c.mean[0] - all[0].mean[0]) <= 30 &&
+        (c.mean[0] - all[0].mean[0] <= 12 || c.spread <= 1.2 * all[0].spread));
     const clusters = all.filter(
       (c, i) =>
         i === 0 ||

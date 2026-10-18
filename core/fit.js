@@ -158,18 +158,6 @@
     };
   }
 
-  function cost(P, G, th, tx, ty, tau) {
-    const co = Math.cos(th);
-    const si = Math.sin(th);
-    let sum = 0;
-    for (let i = 0; i < G.x.length; i++) {
-      const dx = G.x[i] - tx;
-      const dy = G.y[i] - ty;
-      sum += Math.min(Math.abs(sample(P, co * dx + si * dy, -si * dx + co * dy)), tau);
-    }
-    return sum / G.x.length;
-  }
-
   // Lay piece P into the gap G turned by rot (piece side s faces direction
   // (s + rot) % 4): start from the corners, then turn and shift by
   // Gauss-Newton on the rim points (those within TAU). Returns the mean rim
@@ -234,8 +222,51 @@
       pose = pose.map((v, k) => Math.max(start[k] - lim[k], Math.min(start[k] + lim[k], v + d[k])));
       if (Math.abs(d[0]) < 1e-4 && Math.abs(d[1]) < 0.02 && Math.abs(d[2]) < 0.02) break;
     }
-    return { e: cost(P, G, ...pose, tau) / C, th: pose[0], tx: pose[1], ty: pose[2] };
+    // Signed distance of each rim point to the outline at the final pose,
+    // in places, capped at TAU.
+    const [th, tx, ty] = pose;
+    const co = Math.cos(th);
+    const si = Math.sin(th);
+    const r = new Float32Array(G.x.length);
+    let sum = 0;
+    for (let i = 0; i < G.x.length; i++) {
+      const dx = G.x[i] - tx;
+      const dy = G.y[i] - ty;
+      const d = Math.max(-tau, Math.min(tau, sample(P, co * dx + si * dy, -si * dx + co * dy)));
+      r[i] = d / C;
+      sum += Math.abs(d);
+    }
+    return { e: sum / G.x.length / C, r, th, tx, ty };
   }
 
-  PH.fit = { preparePiece, prepareGap, fitPiece, sample, edt };
+  // How much better than the other pieces a piece fits a gap, as a log
+  // likelihood ratio: per rim point the piece's distance under measurement
+  // noise SIGMA against the spread of all pieces there (median distance).
+  // Where every piece fits (flat shoulders) a point says little; a knob that
+  // only this piece matches says a lot. A single matching side is weak
+  // evidence, two or three are strong. Neighbouring points are not
+  // independent, and photos disagree by about as much as plain pieces
+  // differ: one point in twelve counts. all: residuals (fitPiece r) of every
+  // piece at its best turn. Returns a function of one piece's residuals.
+  const SIGMA = 0.016; // places, about half a reference pixel
+  function evidence(all) {
+    const n = all[0]?.length ?? 0;
+    const s = new Float64Array(n);
+    const col = new Float64Array(all.length);
+    for (let i = 0; i < n; i++) {
+      for (let k = 0; k < all.length; k++) col[k] = Math.abs(all[k][i]);
+      col.sort();
+      s[i] = Math.max(1.25 * SIGMA, col[col.length >> 1]);
+    }
+    return (r) => {
+      let L = 0;
+      for (let i = 0; i < n; i++) {
+        const a = Math.abs(r[i]);
+        L += Math.max(-3, Math.log((0.8 * s[i]) / SIGMA) + a / s[i] - (a * a) / (2 * SIGMA * SIGMA));
+      }
+      return L / 12;
+    };
+  }
+
+  PH.fit = { preparePiece, prepareGap, fitPiece, evidence, sample, edt };
 })();

@@ -350,11 +350,6 @@
   function featBonus(inliers) {
     return Math.max(0, Math.min(FEAT_MAX, (inliers - FEAT_MIN) * FEAT_STEP));
   }
-  // Outline fit: mean rim distance in places; the same piece on two photos
-  // differs by about 0.0015 at the same place, a good fit is about 0.01.
-  const FIT_W = 500;
-  const FIT_0 = 0.01;
-  const FIT_OK = 0.014;
   const FEAT_MIN = 3;
   const FEAT_STEP = 1.5;
   const FEAT_MAX = 10;
@@ -391,10 +386,11 @@
       for (const cd of p.cands) {
         if (taken[cd.cell]) continue;
         let topo = -cd.pen * 4;
-        // Outline laid into the gap of the finished part (core/fit.js): it
-        // replaces the side-by-side comparison with the gap there.
+        // Outline laid into the gap of the finished part (core/fit.js), as a
+        // log likelihood ratio: it replaces the side-by-side comparison with
+        // the gap there.
         const rim = cd.fit !== undefined;
-        if (rim) topo += FIT_W * (FIT_0 - cd.fit);
+        if (rim) topo += cd.fit;
         for (let d = 0; d < 4; d++) {
           const ct = constraint.get(`${cd.cell},${d}`);
           if (!ct) continue;
@@ -426,14 +422,7 @@
       // edge are taken.
       if (opts.unknown) {
         const mid = scored[scored.length >> 1];
-        let u = -BETA * Math.log(mid.e + 10);
-        // With outlines laid into the gaps: a piece from further inside fits
-        // the best of the wrong gaps about as well as the runner-up, or
-        // passably.
-        if (scored[0].fit !== undefined) {
-          const second = scored.find((s) => s.cell !== scored[0].cell && s.fit !== undefined);
-          u += FIT_W * (FIT_0 - Math.min(second?.fit ?? FIT_OK, FIT_OK));
-        }
+        const u = -BETA * Math.log(mid.e + 10);
         z += Math.exp(u + Math.log(opts.unknown) - scored[0].logit);
       }
       for (const s of scored) z += Math.exp(s.logit - scored[0].logit);
