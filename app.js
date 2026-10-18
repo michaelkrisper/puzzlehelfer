@@ -5,7 +5,7 @@ const REF_MAX = 2400;
 const SCENE_MAX = 4000;
 const COUNTS = [100, 200, 300, 500, 1000, 1500, 2000];
 // Same as VERSION in sw.js; bump both together.
-const APP_VERSION = 'v37';
+const APP_VERSION = 'v38';
 const ARROWS = 6;
 const $ = (id) => document.getElementById(id);
 
@@ -892,7 +892,9 @@ function focused() {
 
 // Candidate places of a piece: its place and the alternatives.
 function candsOf(x) {
-  return [{ ...x, p: x.conf }, ...(x.alts ?? []).map((a) => ({ ...a, level: x.level }))];
+  const all = [{ ...x, p: x.conf }, ...(x.alts ?? []).map((a) => ({ ...a, level: x.level }))];
+  // A place once (the same place may come back turned otherwise).
+  return all.filter((a, i) => all.findIndex((b) => b.cell === a.cell) === i);
 }
 
 // The piece turned as it goes in (patch rotated by the candidate's rot).

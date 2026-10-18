@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- "Nach Teil" lists each candidate place once (the same place turned
+  otherwise came twice).
+
 - The step card fits one try on one screen: the gap as the photo shows it
   (the real rim, not the reference picture) next to the piece cut from the
   photo, turned as it goes in and at the same scale with its knobs whole,
