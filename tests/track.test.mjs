@@ -4,7 +4,7 @@ import { test } from 'node:test';
 
 const require = createRequire(import.meta.url);
 require('../core/track.js');
-const { tracker, update, addShot, target, overlap, covered, turned } = globalThis.PH.track;
+const { tracker, update, addShot, target, overlap, covered } = globalThis.PH.track;
 
 // A table of smoothed noise, seen through a 96 × 72 window.
 const TW = 700;
@@ -153,11 +153,37 @@ for (const sign of [1, -1])
     assert.equal(t.spin, -sign);
   });
 
+// The phone's x and y against the picture: turned and mirrored, 250 px/m.
+const K = 250;
+const toPhone = ([vx, vy]) => [-vy / K, -vx / K];
+
+// One move by d from p in 1 s, slowing down at both ends, then a pause;
+// with blur, frames 4 to 7 show nothing. Returns whether the tracker was
+// lost in the blur and how far off it was right after.
+function move(t, p, d, blur, sensors) {
+  let vBefore = [0, 0];
+  let lost = false;
+  let off = 0;
+  for (let k = 1; k <= 13; k++) {
+    const tau = Math.min(1, k / 10);
+    const e = (1 - Math.cos(Math.PI * tau)) / 2;
+    const s = (Math.PI / 2) * Math.sin(Math.PI * tau);
+    const x = p[0] + d[0] * e;
+    const y = p[1] + d[1] * e;
+    const v = [d[0] * s, d[1] * s];
+    const dv = toPhone([v[0] - vBefore[0], v[1] - vBefore[1]]).map((a) => a + 0.002 + 0.003 * (rnd() - 0.5));
+    vBefore = v;
+    const dark = blur && k >= 4 && k <= 7;
+    const g = dark ? Float32Array.from({ length: W * H }, () => rnd() * 255) : view(x, y);
+    update(t, g, { dt: 0.1, turn: 0, dv: sensors ? dv : null });
+    if (!t.shots.length || (!t.lost && t.cover < 0.5)) addShot(t, g, null);
+    lost ||= dark && t.lost;
+    if (k === 8) off = Math.hypot(t.pos[0] - (x - 120), t.pos[1] - (y - 120));
+  }
+  return { lost, off };
+}
+
 test('a moment of blur carried by the accelerometer', () => {
-  // The phone's x and y against the picture: turned and mirrored, 250 px/m.
-  const K = 250;
-  const toPhone = ([vx, vy]) => [-vy / K, -vx / K];
-  // Moves of 60 px in 1 s, slowing down at both ends, a pause after each.
   const moves = [
     [60, 0],
     [0, 60],
@@ -170,36 +196,15 @@ test('a moment of blur carried by the accelerometer', () => {
     seed = 11;
     const t = tracker(W, H);
     let p = [120, 120];
-    let lostInBlur = false;
-    let off = 0;
+    let last = null;
     moves.forEach((d, n) => {
-      const blur = n === moves.length - 1;
-      let vBefore = [0, 0];
-      for (let k = 1; k <= 13; k++) {
-        const tau = Math.min(1, k / 10);
-        const e = (1 - Math.cos(Math.PI * tau)) / 2;
-        const s = (Math.PI / 2) * Math.sin(Math.PI * tau);
-        const x = p[0] + d[0] * e;
-        const y = p[1] + d[1] * e;
-        const v = [d[0] * s, d[1] * s];
-        const dv = toPhone([v[0] - vBefore[0], v[1] - vBefore[1]]).map(
-          (a) => a + 0.002 + 0.003 * (rnd() - 0.5),
-        );
-        vBefore = v;
-        const dark = blur && k >= 4 && k <= 7;
-        const g = dark ? Float32Array.from({ length: W * H }, () => rnd() * 255) : view(x, y);
-        update(t, g, { dt: 0.1, turn: 0, dv: sensors ? dv : null });
-        if (!t.shots.length || (!t.lost && t.cover < 0.5)) addShot(t, g, null);
-        if (dark && t.lost) lostInBlur = true;
-        if (blur && k === 8) off = Math.hypot(t.pos[0] - (x - 120), t.pos[1] - (y - 120));
-      }
+      last = move(t, p, d, n === moves.length - 1, sensors);
       p = [p[0] + d[0], p[1] + d[1]];
     });
-    return { lostInBlur, off };
+    return last;
   };
-  const without = run(false);
-  assert.ok(without.lostInBlur);
+  assert.ok(run(false).lost);
   const carried = run(true);
-  assert.ok(!carried.lostInBlur);
+  assert.ok(!carried.lost);
   assert.ok(carried.off < 2, `off by ${carried.off.toFixed(2)} px after the blur`);
 });
