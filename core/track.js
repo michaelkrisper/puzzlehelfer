@@ -1,8 +1,13 @@
 // Where the camera is over the table while sweeping: small gray frames of the
 // live picture compared with the frame before and with the photos taken, by
-// shift only (the phone is held flat and moved, not turned). Good enough to
-// show the photos as a growing map and to say when to hold still; the photos
-// themselves are laid onto each other later by their points (core/stitch.js).
+// shift (the phone is held flat and moved). Good enough to show the photos as
+// a growing map and to say when to hold still; the photos themselves are laid
+// onto each other later by their points (core/stitch.js).
+// The phone's motion sensors help where the picture alone does not: the
+// gyroscope tells how far the phone turned, so the frame is turned back
+// before comparing; the accelerometer carries the position over a moment of
+// blur (fast moves), for at most about half a second: integrated twice, its
+// error grows with the square of the time.
 (() => {
   globalThis.PH ??= {};
   const PH = globalThis.PH;
@@ -21,7 +26,7 @@
   const overlap = (dx, dy, w, h) => Math.max(0, 1 - Math.abs(dx) / w) * Math.max(0, 1 - Math.abs(dy) / h);
 
   // Correlation of b against a where b's pixel (x, y) shows a's (x + dx, y + dy);
-  // insensitive to brightness and contrast.
+  // insensitive to brightness and contrast. NaN in b: nothing there.
   function ncc(a, b, w, h, dx, dy, step) {
     let n = 0;
     let sa = 0;
@@ -31,8 +36,9 @@
     let sab = 0;
     for (let y = Math.max(0, -dy); y < Math.min(h, h - dy); y += step)
       for (let x = Math.max(0, -dx); x < Math.min(w, w - dx); x += step) {
-        const p = a[(y + dy) * w + x + dx];
         const q = b[y * w + x];
+        if (Number.isNaN(q)) continue;
+        const p = a[(y + dy) * w + x + dx];
         sa += p;
         sb += q;
         saa += p * p;
@@ -81,6 +87,37 @@
     };
   }
 
+  // Frame turned by deg about its centre: pixel p shows g at R(deg)(p - c) + c;
+  // NaN where that is outside.
+  function turned(g, w, h, deg) {
+    const r = (deg * Math.PI) / 180;
+    const co = Math.cos(r);
+    const si = Math.sin(r);
+    const cx = (w - 1) / 2;
+    const cy = (h - 1) / 2;
+    const out = new Float32Array(w * h);
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        const u = co * (x - cx) - si * (y - cy) + cx;
+        const v = si * (x - cx) + co * (y - cy) + cy;
+        const i = Math.floor(u);
+        const j = Math.floor(v);
+        if (i < 0 || j < 0 || i >= w - 1 || j >= h - 1) {
+          out[y * w + x] = Number.NaN;
+          continue;
+        }
+        const fu = u - i;
+        const fv = v - j;
+        const k = j * w + i;
+        out[y * w + x] =
+          g[k] * (1 - fu) * (1 - fv) +
+          g[k + 1] * fu * (1 - fv) +
+          g[k + w] * (1 - fu) * fv +
+          g[k + w + 1] * fu * fv;
+      }
+    return out;
+  }
+
   // A tracker for frames of w × h pixels; positions are those of the frame's
   // top left corner on the table, in frame pixels, the first photo at 0, 0.
   function tracker(w, h) {
@@ -96,7 +133,96 @@
       best: -1,
       over: 0,
       cover: 0,
+      // Turn of the phone by the gyroscope, degrees, and at the frame before.
+      yaw: 0,
+      prevYaw: 0,
+      // Which way a turn by the gyroscope turns the picture: +1, -1, or 0 while
+      // not known; decided by the picture.
+      spin: 0,
+      votes: 0,
+      // Speed of the view by the picture (frame px/s) and the change of speed
+      // the accelerometer measured over the frame before (m/s).
+      V: null,
+      dv0: null,
+      // How the phone's acceleration moves the view, learnt while the picture
+      // is followed: least squares of change of speed (px/s) on change of
+      // speed (m/s), slowly forgetting.
+      fit: { aa: [0, 0, 0], va: [0, 0, 0, 0], vv: 0 },
+      // Seconds carried by the accelerometer alone, and how far off the
+      // position may be since (frame px) until a photo confirms it.
+      coast: 0,
+      doubt: 0,
     };
+  }
+
+  // Best shift of the current frame g against frame a, taken at turn ya:
+  // g turned back by the turn since. While the sign is not known both ways,
+  // and the clearly better one counts as a vote.
+  function look(t, a, ya, g, cx, cy, r, step) {
+    const d = t.yaw - ya;
+    const signs = Math.abs(d) < 0.3 ? [0] : t.spin ? [t.spin] : [1, -1];
+    const res = signs.map((s) => ({
+      ...search(a, s ? turned(g, t.w, t.h, s * d) : g, t.w, t.h, cx, cy, r, step),
+      s,
+    }));
+    if (res.length === 1) return res[0];
+    const [p, q] = res;
+    if (Math.abs(d) >= 2 && Math.max(p.c, q.c) >= SAME && Math.abs(p.c - q.c) > 0.05) {
+      t.votes += p.c > q.c ? 1 : -1;
+      if (Math.abs(t.votes) >= 3) t.spin = Math.sign(t.votes);
+    }
+    return p.c >= q.c ? p : q;
+  }
+
+  // Turn of a frame's picture against the map (the picture at the start), in
+  // degrees: the turn by the gyroscope, with the sign the picture showed.
+  const angle = (t, yaw, s) => -(t.spin || s || 0) * yaw;
+  const rot = ([x, y], deg) => {
+    const r = (deg * Math.PI) / 180;
+    return [Math.cos(r) * x - Math.sin(r) * y, Math.sin(r) * x + Math.cos(r) * y];
+  };
+
+  // Learn from one more frame followed by the picture: speed V (px/s), the
+  // phone's change of speed dv over the frame (m/s, null without sensor).
+  function learn(t, V, dv) {
+    if (t.V && dv && t.dv0) {
+      const a = [(dv[0] + t.dv0[0]) / 2, (dv[1] + t.dv0[1]) / 2];
+      const v = [V[0] - t.V[0], V[1] - t.V[1]];
+      const f = t.fit;
+      const k = 0.98;
+      f.aa = [k * f.aa[0] + a[0] * a[0], k * f.aa[1] + a[0] * a[1], k * f.aa[2] + a[1] * a[1]];
+      f.va = [
+        k * f.va[0] + v[0] * a[0],
+        k * f.va[1] + v[0] * a[1],
+        k * f.va[2] + v[1] * a[0],
+        k * f.va[3] + v[1] * a[1],
+      ];
+      f.vv = k * f.vv + v[0] * v[0] + v[1] * v[1];
+    }
+    t.V = V;
+    t.dv0 = dv;
+  }
+
+  // Change of speed of the view (px/s) for the phone's dv (m/s), or null
+  // while the fit is unsure: too little movement, or it explains less than
+  // half of what the picture showed.
+  function carry(t, dv) {
+    const { aa, va, vv } = t.fit;
+    // A little ridge: moved only along a row, nothing is known across it.
+    const a0 = aa[0] + 0.002;
+    const a2 = aa[2] + 0.002;
+    const det = a0 * a2 - aa[1] * aa[1];
+    if (aa[0] + aa[2] < 0.02 || !vv) return null;
+    const i = [a2 / det, -aa[1] / det, a0 / det];
+    const M = [
+      va[0] * i[0] + va[1] * i[1],
+      va[0] * i[1] + va[1] * i[2],
+      va[2] * i[0] + va[3] * i[1],
+      va[2] * i[1] + va[3] * i[2],
+    ];
+    const explained = M[0] * va[0] + M[1] * va[1] + M[2] * va[2] + M[3] * va[3];
+    if (explained < 0.5 * vv) return null;
+    return [M[0] * dv[0] + M[1] * dv[1], M[2] * dv[0] + M[3] * dv[1]];
   }
 
   // The photos the view at pos overlaps, most first.
@@ -132,39 +258,83 @@
   // Follows the camera by one frame: t.pos, t.still (frames without moving),
   // t.lost, t.best (photo with most overlap), t.over (its overlap) and
   // t.cover (part of the view photographed).
-  function update(t, g) {
+  // mo: the phone's motion since the frame before, null without sensors:
+  // dt (s), turn (degrees about the axis of view, by the gyroscope), dv
+  // (change of speed by the accelerometer, m/s, in the phone's x and y).
+  function update(t, g, mo = null) {
     const { w, h } = t;
+    const dt = mo?.dt ?? 0.1;
+    t.yaw += mo?.turn ?? 0;
     let pred = t.pos;
     let moved = false;
+    let carried = false;
+    // Shifts are found in the picture of the frame compared with, and turned
+    // onto the map by its turn.
+    let sign = t.spin;
     if (t.prev) {
-      let m = search(t.prev, g, w, h, t.vel[0], t.vel[1], 5);
-      if (m.c < SAME) m = search(t.prev, g, w, h, 0, 0, Math.round(0.3 * w), 3);
+      let m = look(t, t.prev, t.prevYaw, g, t.vel[0], t.vel[1], 5, 1);
+      if (m.c < SAME) m = look(t, t.prev, t.prevYaw, g, 0, 0, Math.round(0.3 * w), 3);
       moved = m.c >= SAME;
-      t.vel = moved ? [m.dx, m.dy] : [0, 0];
+      if (moved) sign ||= m.s;
+      let step = moved ? [m.dx, m.dy] : [0, 0];
+      if (moved) {
+        learn(t, [m.dx / dt, m.dy / dt], mo?.dv ?? null);
+        t.coast = 0;
+      } else {
+        // The picture blurred: on with the speed before, changed as the
+        // accelerometer says. t.V is the mean over the frame before; at its
+        // end the speed had changed by half of that frame's dv more.
+        const half = t.V && mo?.dv && t.dv0 && t.coast + dt <= 0.6 ? carry(t, t.dv0) : null;
+        const dV = half && carry(t, mo.dv);
+        if (dV) {
+          const v0 = [t.V[0] + half[0] / 2, t.V[1] + half[1] / 2];
+          t.V = [v0[0] + dV[0] / 2, v0[1] + dV[1] / 2];
+          step = [t.V[0] * dt, t.V[1] * dt];
+          t.coast += dt;
+          // Room to search the photos around where it should be.
+          t.doubt += 1 + 0.25 * Math.hypot(...step);
+          carried = true;
+          t.dv0 = mo.dv;
+        } else {
+          t.V = null;
+          t.dv0 = null;
+        }
+      }
+      t.vel = step;
       t.still = moved && Math.hypot(m.dx, m.dy) < 0.35 ? t.still + 1 : 0;
-      if (moved && !t.lost) pred = [t.pos[0] + m.dx, t.pos[1] + m.dy];
+      const d = rot(step, angle(t, t.prevYaw, sign));
+      if ((moved || carried) && !t.lost) pred = [t.pos[0] + d[0], t.pos[1] + d[1]];
     }
     t.prev = g;
+    t.prevYaw = t.yaw;
     if (!t.shots.length) return t;
     // Against the photos: no drift while the view still overlaps one; found
     // again by a wide search after a jump.
     let found = null;
     for (const { i, o } of near(t, pred).slice(0, 2)) {
       if (o < 0.2) break;
-      const s = t.shots[i];
-      const m = search(s.g, g, w, h, pred[0] - s.x, pred[1] - s.y, 4);
-      if (m.c >= SAME && (!found || m.c > found.c)) found = { ...m, s };
+      const sh = t.shots[i];
+      const [cx, cy] = rot([pred[0] - sh.x, pred[1] - sh.y], -angle(t, sh.yaw, sign));
+      const r = Math.min(24, 4 + Math.round(t.doubt));
+      const m = look(t, sh.g, sh.yaw, g, cx, cy, r, r > 8 ? 2 : 1);
+      if (m.c >= SAME && (!found || m.c > found.c)) found = { ...m, sh };
     }
     if (!found && (t.lost || !moved))
       for (const i of new Set([t.best, t.shots.length - 1])) {
         if (i < 0) continue;
-        const s = t.shots[i];
-        const m = search(s.g, g, w, h, 0, 0, Math.round(0.8 * Math.max(w, h)), 3);
-        if (m.c >= SAME + 0.1 && (!found || m.c > found.c)) found = { ...m, s };
+        const sh = t.shots[i];
+        const m = look(t, sh.g, sh.yaw, g, 0, 0, Math.round(0.8 * Math.max(w, h)), 3);
+        if (m.c >= SAME + 0.1 && (!found || m.c > found.c)) found = { ...m, sh };
       }
-    if (found) t.pos = [found.s.x + found.dx, found.s.y + found.dy];
-    else t.pos = pred;
-    t.lost = !found && (t.lost || !moved || !near(t, pred).length);
+    if (found) {
+      const d = rot([found.dx, found.dy], angle(t, found.sh.yaw, found.s || sign));
+      t.pos = [found.sh.x + d[0], found.sh.y + d[1]];
+    } else t.pos = pred;
+    if (found) {
+      t.coast = 0;
+      t.doubt = 0;
+    }
+    t.lost = !found && (t.lost || (!moved && !carried) || !near(t, pred).length);
     const n = near(t, t.pos)[0];
     t.best = n?.i ?? -1;
     t.over = n?.o ?? 0;
@@ -174,7 +344,7 @@
 
   // The current view becomes a photo; thumb is anything drawable.
   function addShot(t, g, thumb) {
-    t.shots.push({ x: t.pos[0], y: t.pos[1], g, thumb });
+    t.shots.push({ x: t.pos[0], y: t.pos[1], yaw: t.yaw, g, thumb });
     t.best = t.shots.length - 1;
     t.over = 1;
     t.cover = 1;
@@ -198,5 +368,9 @@
     return null;
   }
 
-  PH.track = { gray, overlap, covered, search, tracker, update, addShot, target };
+  // Turn of a photo's picture taken at yaw against the map, degrees (0 while
+  // the sign is not known).
+  const turnOf = (t, yaw) => angle(t, yaw, 0);
+
+  PH.track = { gray, overlap, covered, search, turned, tracker, update, addShot, target, turnOf, rot };
 })();

@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Sweep with the phone's motion sensors (no permission needed in Chrome):
+  - The photo is taken when the hand is calmest (gyroscope), not just when
+    the picture stands still: sharper photos.
+  - "Halt" stays until the photo is taken ("Foto wird aufgenommen – still
+    halten"); before, the app said to move on while the camera still took
+    it.
+  - A spirit level in the corner; held more than 15 degrees off flat, no
+    photo and "Flach" (at 30 cm the far side is then a tenth smaller and
+    out of focus).
+  - A turned phone: the frame is turned back by the gyroscope before
+    comparing, the photos over the live picture and the shifts on the map
+    turned along; which way the picture turns is learnt from the picture.
+    Followed to 2 px with turns up to 15 degrees (before: lost).
+  - A moment of blur (fast moves) is carried by the accelerometer for up to
+    0.6 s, with the speed before and the measured change of speed; how the
+    phone's acceleration moves the picture is learnt while the picture is
+    followed. In a test with 0.4 s blur while braking: within 2 px, not
+    lost (before: "Zurück").
+
 - Sweep 30 cm over the table with guidance: the photos taken lie faintly
   over the live picture where they are, the one most in view framed, and a
   dashed frame shows where that frame should be to stop (about half of the

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 
 const require = createRequire(import.meta.url);
 require('../core/track.js');
-const { tracker, update, addShot, target, overlap, covered } = globalThis.PH.track;
+const { tracker, update, addShot, target, overlap, covered, turned } = globalThis.PH.track;
 
 // A table of smoothed noise, seen through a 96 × 72 window.
 const TW = 700;
@@ -43,6 +43,36 @@ function view(x, y, gain = 1) {
         table[i + TW] * (1 - fx) * fy +
         table[i + TW + 1] * fx * fy;
       g[v * W + u] = p * gain + 4 * (rnd() - 0.5);
+    }
+  return g;
+}
+
+// The view turned by deg about its centre.
+function turnedView(x, y, deg) {
+  const big = new Float32Array((W + 40) * (H + 40));
+  const ix = Math.floor(x) - 20;
+  const iy = Math.floor(y) - 20;
+  for (let v = 0; v < H + 40; v++)
+    for (let u = 0; u < W + 40; u++) big[v * (W + 40) + u] = table[(iy + v) * TW + ix + u];
+  const r = (deg * Math.PI) / 180;
+  const g = new Float32Array(W * H);
+  const cx = (W - 1) / 2;
+  const cy = (H - 1) / 2;
+  for (let v = 0; v < H; v++)
+    for (let u = 0; u < W; u++) {
+      const a = Math.cos(r) * (u - cx) - Math.sin(r) * (v - cy) + cx + 20;
+      const b = Math.sin(r) * (u - cx) + Math.cos(r) * (v - cy) + cy + 20;
+      const i = Math.floor(a);
+      const j = Math.floor(b);
+      const fa = a - i;
+      const fb = b - j;
+      const k = j * (W + 40) + i;
+      g[v * W + u] =
+        big[k] * (1 - fa) * (1 - fb) +
+        big[k + 1] * fa * (1 - fb) +
+        big[k + W + 40] * (1 - fa) * fb +
+        big[k + W + 41] * fa * fb +
+        4 * (rnd() - 0.5);
     }
   return g;
 }
@@ -100,4 +130,76 @@ test('target: where half the view is new', () => {
   assert.equal(d.s, t.shots[1]);
   assert.ok(Math.abs(covered(t, [d.s.x + d.dx, d.s.y + d.dy]) - 0.5) < 0.01);
   assert.ok(d.dx > 80, `${d.dx}`);
+});
+
+for (const sign of [1, -1])
+  test(`turned phone, gyroscope turning ${sign > 0 ? 'with' : 'against'} the picture`, () => {
+    const t = tracker(W, H);
+    const start = [150, 150];
+    let last = 0;
+    let worst = 0;
+    for (let k = 0; k <= 100; k++) {
+      const x = start[0] + 3 * k;
+      const y = start[1] + 0.3 * k;
+      const deg = 15 * Math.sin(k / 25);
+      const g = turnedView(x, y, deg);
+      update(t, g, { dt: 0.1, turn: sign * (deg - last), dv: null });
+      last = deg;
+      if (!t.shots.length || t.cover < 0.5) addShot(t, g, null);
+      assert.ok(!t.lost, `lost at frame ${k}`);
+      worst = Math.max(worst, Math.hypot(t.pos[0] - (x - start[0]), t.pos[1] - (y - start[1])));
+    }
+    assert.ok(worst < 2, `off by ${worst.toFixed(2)} px`);
+    assert.equal(t.spin, -sign);
+  });
+
+test('a moment of blur carried by the accelerometer', () => {
+  // The phone's x and y against the picture: turned and mirrored, 250 px/m.
+  const K = 250;
+  const toPhone = ([vx, vy]) => [-vy / K, -vx / K];
+  // Moves of 60 px in 1 s, slowing down at both ends, a pause after each.
+  const moves = [
+    [60, 0],
+    [0, 60],
+    [60, 10],
+    [-20, 60],
+    [60, -30],
+    [50, 40],
+  ];
+  const run = (sensors) => {
+    seed = 11;
+    const t = tracker(W, H);
+    let p = [120, 120];
+    let lostInBlur = false;
+    let off = 0;
+    moves.forEach((d, n) => {
+      const blur = n === moves.length - 1;
+      let vBefore = [0, 0];
+      for (let k = 1; k <= 13; k++) {
+        const tau = Math.min(1, k / 10);
+        const e = (1 - Math.cos(Math.PI * tau)) / 2;
+        const s = (Math.PI / 2) * Math.sin(Math.PI * tau);
+        const x = p[0] + d[0] * e;
+        const y = p[1] + d[1] * e;
+        const v = [d[0] * s, d[1] * s];
+        const dv = toPhone([v[0] - vBefore[0], v[1] - vBefore[1]]).map(
+          (a) => a + 0.002 + 0.003 * (rnd() - 0.5),
+        );
+        vBefore = v;
+        const dark = blur && k >= 4 && k <= 7;
+        const g = dark ? Float32Array.from({ length: W * H }, () => rnd() * 255) : view(x, y);
+        update(t, g, { dt: 0.1, turn: 0, dv: sensors ? dv : null });
+        if (!t.shots.length || (!t.lost && t.cover < 0.5)) addShot(t, g, null);
+        if (dark && t.lost) lostInBlur = true;
+        if (blur && k === 8) off = Math.hypot(t.pos[0] - (x - 120), t.pos[1] - (y - 120));
+      }
+      p = [p[0] + d[0], p[1] + d[1]];
+    });
+    return { lostInBlur, off };
+  };
+  const without = run(false);
+  assert.ok(without.lostInBlur);
+  const carried = run(true);
+  assert.ok(!carried.lostInBlur);
+  assert.ok(carried.off < 2, `off by ${carried.off.toFixed(2)} px after the blur`);
 });

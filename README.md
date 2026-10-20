@@ -44,9 +44,11 @@ puzzle and move it slowly over the table, row by row. The photos taken lie
 faintly over the live picture, the one most in view framed, and a dashed
 frame shows where that frame should be: there about half of the picture is
 new, the app shows "Halt" and takes a photo as soon as the phone is held
-still. A small map in the corner shows all photos so far. Holding still
-over a strip still missing (the last row along the edge) takes one there
-too. All photos are put together into one picture of the table from above
+still and the hand is calm. A small map in the corner shows all photos so
+far, a spirit level how flat the phone is held (too tilted: "Flach", no
+photo). Holding still over a strip still missing (the last row along the
+edge) takes one there too. The phone's gyroscope and accelerometer help to
+follow a turned phone and fast moves. All photos are put together into one picture of the table from above
 ("Tisch von oben", the default with two or more): photos with some of the
 finished part by it, the others (close-ups of a tray) onto a photo they
 overlap. A photo that overlaps none is marked "nicht eingeordnet". The

@@ -1,7 +1,7 @@
 // Precache everything; after that the app needs no network.
 // Bump VERSION whenever any of these files changes, together with
 // APP_VERSION in app.js (shown in the header).
-const VERSION = 'v40';
+const VERSION = 'v41';
 const FILES = [
   './',
   'index.html',

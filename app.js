@@ -5,7 +5,7 @@ const REF_MAX = 2400;
 const SCENE_MAX = 4000;
 const COUNTS = [100, 200, 300, 500, 1000, 1500, 2000];
 // Same as VERSION in sw.js; bump both together.
-const APP_VERSION = 'v40';
+const APP_VERSION = 'v41';
 const ARROWS = 6;
 const $ = (id) => document.getElementById(id);
 
@@ -567,6 +567,10 @@ for (const input of document.querySelectorAll('input[data-scene]')) {
 // phone is held still. A small map shows all photos so far. Each photo is
 // laid onto the ones before (core/stitch.js) and analysed in the background;
 // a spot photographed again later shows its new state (the newest photo wins).
+// The motion sensors help: the gyroscope says how far the phone turned and
+// how much the hand shakes (the photo is taken when it is calmest), the
+// accelerometer says how flat the phone is held (a spirit level) and carries
+// the position over a moment of blur.
 const sweep = {
   stream: null,
   timer: 0,
@@ -579,15 +583,86 @@ const sweep = {
 // Part of the view already photographed at which to stop and below which a
 // photo is taken; part of one photo still in view at least, to lay it on.
 const HOLD = { want: 0.45, from: 0.6, to: 0.25 };
+// Tilt above which no photo is taken (degrees; at 30 cm the far side of
+// the picture is then a tenth smaller and out of focus) and turning speed of
+// a calm hand (degrees per second).
+const TILT = { warn: 8, max: 15 };
+const CALM = 3;
 const SWEEP_SAY = {
   start: 'Etwa 30 cm über eine Ecke des Puzzles halten und kurz stillhalten …',
   on: 'Langsam weiterfahren, bis der helle Rahmen den gestrichelten erreicht …',
   hold: 'Halt – kurz stillhalten …',
+  shoot: 'Foto wird aufgenommen – still halten …',
+  tilt: 'Handy flach über den Tisch halten (Wasserwaage links unten) …',
   far: 'Zu weit – etwas zurück, damit sich die Fotos überlappen.',
   lost: 'Zurück zu einer Stelle, die schon fotografiert ist (siehe Karte).',
 };
-const SWEEP_BIG = { hold: 'Halt', far: 'Zurück', lost: 'Zurück' };
-const SWEEP_COLOR = { start: '#fff', on: '#fff', hold: '#3c3', far: '#e33', lost: '#e33' };
+const SWEEP_BIG = { hold: 'Halt', shoot: 'Halt', tilt: 'Flach', far: 'Zurück', lost: 'Zurück' };
+const SWEEP_COLOR = {
+  start: '#fff',
+  on: '#fff',
+  hold: '#3c3',
+  shoot: '#3c3',
+  tilt: '#ffd23c',
+  far: '#e33',
+  lost: '#e33',
+};
+
+// Motion sensors (DeviceMotionEvent, no permission needed in Chrome), summed
+// between two frames: turn about the axis of view (gyroscope, degrees),
+// change of speed (accelerometer without gravity, m/s), the fastest turning
+// (shake, degrees per second) and gravity (tilt).
+const sense = { n: 0, gyro: false, acc: false, turn: 0, dv: [0, 0], rate: 0, g: [0, 0, 0], ng: 0, last: 0 };
+
+function onMotion(e) {
+  const dt = Math.min(0.1, (e.interval || 16) / 1000);
+  const r = e.rotationRate;
+  if (r && r.alpha !== null) {
+    sense.gyro = true;
+    sense.turn += r.alpha * dt;
+    sense.rate = Math.max(sense.rate, Math.hypot(r.alpha, r.beta ?? 0, r.gamma ?? 0));
+  }
+  const a = e.acceleration;
+  if (a && a.x !== null) {
+    sense.acc = true;
+    sense.dv[0] += a.x * dt;
+    sense.dv[1] += a.y * dt;
+  }
+  const g = e.accelerationIncludingGravity;
+  if (g && g.x !== null) {
+    sense.g[0] += g.x;
+    sense.g[1] += g.y;
+    sense.g[2] += g.z;
+    sense.ng++;
+  }
+  sense.n++;
+}
+
+// The sensors since the last frame: motion for the tracker, shake and
+// gravity; nulls without sensors.
+function senseTake() {
+  const now = performance.now();
+  const dt = sense.last ? Math.min(0.5, (now - sense.last) / 1000) : 0.1;
+  sense.last = now;
+  const out = {
+    mo: sense.n ? { dt, turn: sense.gyro ? sense.turn : 0, dv: sense.acc ? sense.dv : null } : null,
+    rate: sense.gyro && sense.n ? sense.rate : null,
+    grav: sense.ng ? sense.g.map((v) => v / sense.ng) : null,
+  };
+  Object.assign(sense, { n: 0, turn: 0, dv: [0, 0], rate: 0, g: [0, 0, 0], ng: 0 });
+  return out;
+}
+
+// Gravity in the screen's directions (right, down), whichever way the phone
+// is turned: where the bubble of a spirit level goes.
+function bubbleOf([x, y, z]) {
+  const a = ((screen.orientation?.angle ?? 0) * Math.PI) / 180;
+  const n = Math.hypot(x, y, z) || 1;
+  return [(x * Math.cos(a) - y * Math.sin(a)) / n, -(x * Math.sin(a) + y * Math.cos(a)) / n];
+}
+
+const tiltOf = ([x, y, z]) =>
+  (Math.acos(Math.min(1, Math.abs(z) / (Math.hypot(x, y, z) || 1))) * 180) / Math.PI;
 const sweepSmall = document.createElement('canvas');
 
 function sweepTracker(v) {
@@ -648,33 +723,43 @@ function sweepDraw(st) {
   const ox = (c.clientWidth - vw) / 2;
   const oy = (c.clientHeight - vh) / 2;
   const s = vw / t.w;
-  const at = (p) => [ox + (p.x - t.pos[0]) * s, oy + (p.y - t.pos[1]) * s];
+  // A photo's picture over the view: its offset on the map (frame px) into
+  // the view's picture, turned by how much more the phone was turned then.
+  const cur = PH.track.turnOf(t, t.yaw);
+  const frame = (dx, dy, yaw, paint) => {
+    const [x, y] = PH.track.rot([dx, dy], -cur);
+    if (Math.abs(x) >= t.w || Math.abs(y) >= t.h) return;
+    g.save();
+    g.translate(ox + vw / 2 + x * s, oy + vh / 2 + y * s);
+    g.rotate(((PH.track.turnOf(t, yaw) - cur) * Math.PI) / 180);
+    paint();
+    g.restore();
+  };
   g.save();
   g.beginPath();
   g.rect(ox, oy, vw, vh);
   g.clip();
   if (!t.lost) {
     g.globalAlpha = 0.4;
-    for (const p of t.shots) {
-      const [x, y] = at(p);
-      if (Math.abs(x - ox) < vw && Math.abs(y - oy) < vh) g.drawImage(p.thumb, x, y, vw, vh);
-    }
+    for (const p of t.shots)
+      frame(p.x - t.pos[0], p.y - t.pos[1], p.yaw, () => g.drawImage(p.thumb, -vw / 2, -vh / 2, vw, vh));
     g.globalAlpha = 1;
     g.lineWidth = 3;
     const best = t.shots[t.best];
     if (best) {
       g.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-      g.strokeRect(...at(best), vw, vh);
+      frame(best.x - t.pos[0], best.y - t.pos[1], best.yaw, () => g.strokeRect(-vw / 2, -vh / 2, vw, vh));
     }
     const aim = PH.track.target(t, HOLD.want);
     if (aim) {
       g.setLineDash([12, 9]);
-      g.strokeStyle = st === 'hold' ? SWEEP_COLOR.hold : '#ffd23c';
-      g.strokeRect(ox - aim.dx * s, oy - aim.dy * s, vw, vh);
+      g.strokeStyle = st === 'hold' || st === 'shoot' ? SWEEP_COLOR.hold : '#ffd23c';
+      frame(-aim.dx, -aim.dy, aim.s.yaw, () => g.strokeRect(-vw / 2, -vh / 2, vw, vh));
       g.setLineDash([]);
     }
   }
   g.restore();
+  if (sweep.grav) sweepLevel(g, ox + 44, oy + vh - 44, 30);
   if (SWEEP_BIG[st]) {
     g.lineWidth = 8;
     g.strokeStyle = SWEEP_COLOR[st];
@@ -688,6 +773,29 @@ function sweepDraw(st) {
     g.fillStyle = SWEEP_COLOR[st];
     g.fillText(SWEEP_BIG[st], ox + vw / 2, oy + vh / 2);
   }
+}
+
+// Spirit level: the bubble in the middle when the phone lies flat, the
+// inner ring at the tilt that still counts as flat, the outer at 30 degrees.
+function sweepLevel(g, cx, cy, R) {
+  const [bx, by] = bubbleOf(sweep.grav);
+  const tilt = tiltOf(sweep.grav);
+  const k = Math.min(1, Math.hypot(bx, by) / Math.sin(Math.PI / 6));
+  const d = Math.hypot(bx, by) || 1;
+  g.fillStyle = 'rgba(0, 0, 0, 0.45)';
+  g.beginPath();
+  g.arc(cx, cy, R, 0, 2 * Math.PI);
+  g.fill();
+  g.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+  g.lineWidth = 2;
+  g.stroke();
+  g.beginPath();
+  g.arc(cx, cy, (R * Math.sin((TILT.max * Math.PI) / 180)) / Math.sin(Math.PI / 6), 0, 2 * Math.PI);
+  g.stroke();
+  g.fillStyle = tilt <= TILT.warn ? '#3c3' : tilt <= TILT.max ? '#ffd23c' : '#e33';
+  g.beginPath();
+  g.arc(cx + (bx / d) * k * (R - 7), cy + (by / d) * k * (R - 7), 7, 0, 2 * Math.PI);
+  g.fill();
 }
 
 // All photos so far as a map, the view as a frame on it.
@@ -788,10 +896,18 @@ function sweepTick() {
   if (v.videoWidth > v.videoHeight !== sweep.t.w > sweep.t.h) sweepTracker(v);
   const t = sweep.t;
   const g = sweepFrame(v);
-  PH.track.update(t, g);
-  const st = sweepState(t);
-  const wait = t.cover > HOLD.from ? 12 : 3;
-  if (!sweep.busy && (st === 'start' || st === 'hold') && t.still >= wait) sweepShot(g);
+  const { mo, rate, grav } = senseTake();
+  PH.track.update(t, g, mo);
+  sweep.grav = grav;
+  const base = sweepState(t);
+  const flat = !grav || tiltOf(grav) <= TILT.max;
+  // Held still by the picture for a moment, then the photo when the hand is
+  // calm (by the gyroscope), or a little later anyway.
+  const need = (t.cover > HOLD.from ? 12 : 2) + (rate === null ? 1 : 0);
+  const calm = rate === null || rate < CALM;
+  const ready = (base === 'start' || base === 'hold') && t.still >= need && (calm || t.still >= need + 8);
+  if (!sweep.busy && flat && ready) sweepShot(g);
+  const st = sweep.busy ? 'shoot' : !flat && base !== 'lost' ? 'tilt' : base;
   sweepSay(SWEEP_SAY[st]);
   sweepDraw(st);
   sweepMap(st);
@@ -813,7 +929,9 @@ $('sweep-start').addEventListener('click', async () => {
   v.srcObject = sweep.stream;
   await v.play();
   sweepTracker(v);
-  Object.assign(sweep, { n: 0, done: 0 });
+  Object.assign(sweep, { n: 0, done: 0, grav: null });
+  senseTake();
+  window.addEventListener('devicemotion', onMotion);
   show('sweep', true);
   sweepSay(SWEEP_SAY.start);
   sweep.timer = setInterval(sweepTick, 100);
@@ -825,6 +943,7 @@ $('sweep-shot').addEventListener('click', () => {
 
 $('sweep-done').addEventListener('click', async () => {
   clearInterval(sweep.timer);
+  window.removeEventListener('devicemotion', onMotion);
   for (const t of sweep.stream?.getTracks() ?? []) t.stop();
   sweep.stream = null;
   show('sweep', false);
