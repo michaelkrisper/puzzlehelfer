@@ -28,22 +28,35 @@ let refQuad = null;
 const scenes = new Map(); // id → result of analyzeScene
 const previews = new Map(); // id → photo at most 2400 px, for the table view
 const points = new Map(); // id → ORB points, to lay photos onto each other
+const near = new Map(); // id → photos of the sweep next to it, nearest first
+const tried = new Set(); // pairs of photos compared, `${id}:${other}`
+let table = null; // table colours of the last photo that clearly showed them
 
-// The placed photo a photo overlaps best (most common points), or null.
+// A placed photo the photo overlaps (most common points), or null. The
+// sweep's neighbours first: one comparison takes a second or more on a
+// phone.
 function overlapOf(id) {
+  const order = [...new Set([...(near.get(id) ?? []), ...scenes.keys()])];
   let best = null;
-  for (const [oid, o] of scenes) {
-    if (oid === id || !o.view || !points.has(oid)) continue;
+  for (const oid of order) {
+    const o = scenes.get(oid);
+    const key = `${id}:${oid}`;
+    if (oid === id || !o?.view || !points.has(oid) || tried.has(key)) continue;
+    tried.add(key);
     const m = PH.stitch.match(cv, points.get(id), points.get(oid));
     if (m && (!best || m.inliers > best.inliers)) best = { ...m, o };
+    if (best?.inliers >= 150) break;
   }
   return best;
 }
+
+const scaled = (k) => [k, 0, 0, 0, k, 0, 0, 0, 1];
 
 // Photos without the finished part onto one they overlap (core/stitch.js),
 // repeated while one more finds its place: a close-up of a tray taken
 // before the overview gets its place with the overview.
 function placeAll() {
+  const { mulH } = PH.geom;
   let more = true;
   while (more) {
     more = false;
@@ -51,10 +64,33 @@ function placeAll() {
       if (s.view || !points.has(id)) continue;
       const best = overlapOf(id);
       if (!best) continue;
-      PH.pipeline.placeScene(s, PH.geom.mulH(best.o.view.Hi, best.H));
+      // Points are in photo pixels, views in working pixels.
+      const H = mulH(scaled(best.o.scale), mulH(best.H, scaled(1 / s.scale)));
+      PH.pipeline.placeScene(s, mulH(best.o.view.Hi, H));
       more = true;
     }
   }
+}
+
+// Scale of the photos of the same size before (a sweep at one height), for
+// one without loose pieces to measure.
+function scaleHint(image) {
+  const v = [...scenes.values()]
+    .filter(
+      (s) => Math.abs(s.width / s.scale - image.width) < 2 && Math.abs(s.height / s.scale - image.height) < 2,
+    )
+    .map((s) => s.scale)
+    .sort((a, b) => a - b);
+  return v.length ? v[v.length >> 1] : null;
+}
+
+function forget() {
+  scenes.clear();
+  previews.clear();
+  points.clear();
+  near.clear();
+  tried.clear();
+  table = null;
 }
 
 function shrink(image, max) {
@@ -75,6 +111,11 @@ function shrink(image, max) {
   dst.delete();
   return out;
 }
+
+// Shown photos with pieces of about 65 px, at least 1200 and at most 2400 px:
+// a sweep 30 cm over the table brings many photos with large pieces.
+const viewMax = (image, s) =>
+  Math.round(Math.min(2400, Math.max(1200, 0.75 * s.scale * Math.max(image.width, image.height))));
 
 const progressFor = (id) => (text) => postMessage({ type: 'progress', id, text });
 
@@ -116,9 +157,7 @@ const handlers = {
     const prev = ref ?? cache;
     ref = PH.reference.buildReference(cv, image, quad, cols, rows, prev);
     // Places depend on the grid, so old analyses no longer fit.
-    scenes.clear();
-    previews.clear();
-    points.clear();
+    forget();
     // New feature points go back to the app, which stores them.
     const fresh = ref.feat !== prev?.feat ? { key: ref.key, feat: ref.feat } : null;
     // Finer copy for the views, which can be zoomed.
@@ -126,12 +165,14 @@ const handlers = {
     const view = PH.reference.rectify(cv, image, quad, Math.round(ref.W * f), Math.round(ref.H * f));
     return { rgba: ref.rgba.data, W: ref.W, H: ref.H, C: ref.C, cache: fresh, view };
   },
-  scene({ id, sceneId, image }) {
+  scene({ id, sceneId, image, next = [] }) {
     if (!ref) throw new Error('Keine Vorlage');
-    const s = PH.pipeline.analyzeScene(cv, image, ref, progressFor(id));
+    const s = PH.pipeline.analyzeScene(cv, image, ref, progressFor(id), { scale: scaleHint(image), table });
+    if (s.table) table = s.table;
     scenes.set(sceneId, s);
-    previews.set(sceneId, shrink(image, 2400));
-    points.set(sceneId, PH.stitch.describe(cv, image, s.scale));
+    previews.set(sceneId, shrink(image, viewMax(image, s)));
+    points.set(sceneId, PH.stitch.describe(cv, image));
+    near.set(sceneId, next);
     placeAll();
     return {
       pieces: s.pieces.length,
@@ -142,6 +183,7 @@ const handlers = {
       border: s.board?.border ?? null,
       aspect: ref.hi.w / ref.hi.h,
       seams: seamQuad(s.board?.seams),
+      viewMax: viewMax(image, s),
     };
   },
   // All photos with the puzzle as one picture from above.
@@ -160,12 +202,11 @@ const handlers = {
     scenes.delete(sceneId);
     previews.delete(sceneId);
     points.delete(sceneId);
+    near.delete(sceneId);
     return {};
   },
   clearScenes() {
-    scenes.clear();
-    previews.clear();
-    points.clear();
+    forget();
     return {};
   },
   solve({ id, placed = [], removed = [], nofit = [], cells = [], crop = null }) {

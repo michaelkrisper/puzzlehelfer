@@ -9,8 +9,8 @@
   const SIDE = 1600; // longer side the points are found at
   const MIN_INLIERS = 40;
 
-  // Points of a photo (ImageData) in working pixels (photo pixel · scale).
-  function describe(cv, image, scale) {
+  // Points of a photo (ImageData) in photo pixels.
+  function describe(cv, image) {
     const f = Math.min(1, SIDE / Math.max(image.width, image.height));
     const src = cv.matFromImageData(image);
     const small = new cv.Mat();
@@ -33,18 +33,17 @@
     orb.detectAndCompute(gray, none, kp, desc);
     const n = kp.size();
     const pts = new Float32Array(n * 2);
-    const k = scale / f;
     for (let i = 0; i < n; i++) {
       const p = kp.get(i).pt;
-      pts[i * 2] = p.x * k;
-      pts[i * 2 + 1] = p.y * k;
+      pts[i * 2] = p.x / f;
+      pts[i * 2 + 1] = p.y / f;
     }
     const out = {
       n,
       pts,
       desc: Uint8Array.from(desc.data),
       cols: desc.cols,
-      size: (Math.max(gray.cols, gray.rows) / f) * scale,
+      size: Math.max(image.width, image.height),
     };
     for (const x of [gray, orb, kp, desc, none]) x.delete();
     return out;
@@ -56,8 +55,8 @@
     return m;
   };
 
-  // Homography from photo a's working pixels to photo b's, with the number
-  // of points that agree; null if the two do not overlap clearly.
+  // Homography from photo a's pixels to photo b's, with the number of points
+  // that agree; null if the two do not overlap clearly.
   function match(cv, a, b) {
     if (a.n < MIN_INLIERS || b.n < MIN_INLIERS) return null;
     const da = toMat(cv, a);

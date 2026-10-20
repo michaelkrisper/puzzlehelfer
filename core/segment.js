@@ -116,10 +116,32 @@
     return dist;
   }
 
+  // Part of the puzzle picture (Lab) within 3 standard deviations of a table
+  // colour.
+  function pictureShare(pic, m) {
+    const n = pic.length / 3;
+    const step = Math.max(1, Math.floor(n / 20000));
+    let k = 0;
+    let t = 0;
+    for (let i = 0; i < n; i += step) {
+      const dl = (pic[i * 3] - m.mean[0]) * m.inv[0];
+      const da = (pic[i * 3 + 1] - m.mean[1]) * m.inv[1];
+      const db = (pic[i * 3 + 2] - m.mean[2]) * m.inv[2];
+      if (dl * dl + da * da + db * db < 9) k++;
+      t++;
+    }
+    return k / t;
+  }
+
   // Distance of every pixel to the table model, in standard deviations.
   // Lightness counts half so that cast shadows of pieces do not count as
   // pieces.
-  function backgroundDistance(lab, w, h, sd = null) {
+  // prior: {picture (Lab of the puzzle picture), table ({model, noise} of an
+  // earlier photo)}. A close-up of the finished part may show nothing but
+  // puzzle at its border, plain sky passing for the table: a base colour
+  // frequent in the picture then gives way to the table of an earlier photo,
+  // unless the border shows that table too.
+  function backgroundDistance(lab, w, h, sd = null, prior = null) {
     const band = Math.max(4, Math.round(Math.min(w, h) * 0.04));
     const s = [];
     const ss = [];
@@ -194,7 +216,7 @@
         i === 0 ||
         (c.weight > 0.05 && sameHue(c) && plain(c) && (c.mean[0] - all[0].mean[0] > -12 || c.weight >= 0.15)),
     );
-    const model = clusters.map((c) => ({
+    let model = clusters.map((c) => ({
       mean: c.mean,
       // Spread limited both ways: a too wide cluster would otherwise let
       // pieces pass as table.
@@ -204,6 +226,12 @@
         1 / Math.min(6, Math.max(2.5, c.std[2])),
       ],
     }));
+    const trusted = !prior?.picture || pictureShare(prior.picture, model[0]) <= 0.1;
+    const kin = (a, b) =>
+      Math.abs(a.mean[0] - b.mean[0]) <= 10 && Math.hypot(a.mean[1] - b.mean[1], a.mean[2] - b.mean[2]) < 6;
+    // Only if none of its own table colours is one of the earlier photo.
+    const known = !trusted && prior.table && !model.some((m) => prior.table.model.some((t) => kin(m, t)));
+    if (known) model = prior.table.model;
     const n = w * h;
     const dist = tableDistance(lab, n, model);
     // Second distance for the dark rims of the pieces: darker than the table,
@@ -242,8 +270,8 @@
       if (tableSet.has(best)) nd.push(dist[px[i]]);
     }
     nd.sort((a, b) => a - b);
-    const noise = nd.length ? nd[Math.floor(nd.length / 2)] : null;
-    return { dist, shade, model, noise };
+    const noise = known ? prior.table.noise : nd.length ? nd[Math.floor(nd.length / 2)] : null;
+    return { dist, shade, model, noise, trusted };
   }
 
   // Local spread of lightness (7×7): cardboard edges, fur and lettering have a
@@ -677,7 +705,7 @@
   function segmentScene(cv, img, lab, opts = {}) {
     const { width: w, height: h } = img;
     const sd = localStd(cv, img);
-    const { dist, shade, noise, model } = backgroundDistance(lab, w, h, sd);
+    const { dist, shade, noise, model, trusted } = backgroundDistance(lab, w, h, sd, opts.prior);
     const sample = [];
     for (let i = 0; i < dist.length; i += 7) sample.push(Math.min(dist[i], 30));
     // Spread of the table itself at the image border: grain and noise must not
@@ -795,8 +823,10 @@
         (parent < 0 ? outer : holes).push({ i, area, parent });
         c.delete();
       }
+      // No piece covers a sixteenth of the photo: in a close-up the finished
+      // part filling the picture is the only blob, not a typical piece.
       const areas = outer
-        .filter((o) => o.area > minArea)
+        .filter((o) => o.area > minArea && o.area < (w * h) / 16)
         .map((o) => o.area)
         .sort((a, b) => a - b);
       const pieceArea = typicalArea(areas);
@@ -804,18 +834,20 @@
     };
     const sc = scan();
     const { contours, hier, outer, holes, pieceArea } = sc;
+    // Without one, sizes against a piece of a photo 30 cm over the table.
+    const unit = pieceArea || (w * h) / 400;
 
     const pieces = [];
     const big = [];
     const mask = cv.Mat.zeros(h, w, cv.CV_8UC1);
     const bigMask = cv.Mat.zeros(h, w, cv.CV_8UC1);
     for (const o of outer) {
-      if (o.area < Math.max(minArea, pieceArea * 0.3)) continue;
+      if (o.area < Math.max(minArea, unit * 0.3)) continue;
       const c = contours.get(o.i);
       const rect = cv.boundingRect(c);
       const touches =
         rect.x <= 1 || rect.y <= 1 || rect.x + rect.width >= w - 1 || rect.y + rect.height >= h - 1;
-      const isBig = o.area > pieceArea * 2.4;
+      const isBig = o.area > unit * 2.4;
       cv.drawContours(mask, contours, o.i, new cv.Scalar(255), -1);
       if (isBig) cv.drawContours(bigMask, contours, o.i, new cv.Scalar(255), -1);
       const contour = contourPoints(c);
@@ -825,7 +857,7 @@
       const firstQ = isBig || touches ? 1 : (PH.piece.analyzeContour(contour)?.quality ?? 0);
       if (!isBig && opts.refine !== false && firstQ < 0.5) {
         const bb = [rect.x, rect.y, rect.width, rect.height];
-        const ref = refinePiece(cv, rgb, contour, bb, Math.sqrt(pieceArea));
+        const ref = refinePiece(cv, rgb, contour, bb, Math.sqrt(unit));
         if (ref && ref.area > o.area * 0.7 && ref.area < o.area * 1.6) alt = ref.contour;
       }
       const item = {
@@ -840,16 +872,16 @@
     }
     // Holes in large areas (empty places in the finished part) stay free,
     // small holes (reflections, table-coloured spots in the motif) do not.
-    const bigIds = new Set(outer.filter((o) => o.area > pieceArea * 2.4).map((o) => o.i));
+    const bigIds = new Set(outer.filter((o) => o.area > unit * 2.4).map((o) => o.i));
     for (const hole of holes) {
-      if (bigIds.has(hole.parent) && hole.area > pieceArea * 0.12) {
+      if (bigIds.has(hole.parent) && hole.area > unit * 0.12) {
         cv.drawContours(mask, contours, hole.i, new cv.Scalar(0), -1);
         cv.drawContours(bigMask, contours, hole.i, new cv.Scalar(0), -1);
       }
     }
     // Loose pieces can lie in such a hole, e.g. inside the finished border.
     for (const o of outer)
-      if (!bigIds.has(o.i) && o.area >= Math.max(minArea, pieceArea * 0.3))
+      if (!bigIds.has(o.i) && o.area >= Math.max(minArea, unit * 0.3))
         cv.drawContours(mask, contours, o.i, new cv.Scalar(255), -1);
     raw.delete();
     rgb.delete();
@@ -857,7 +889,9 @@
     k7.delete();
     contours.delete();
     hier.delete();
-    return { pieces, big, mask, bigMask, pieceArea, threshold: thr, model, low: tLow };
+    // The table to go on with in the next photos, if clearly table.
+    const table = trusted && noise !== null ? { model, noise } : null;
+    return { pieces, big, mask, bigMask, pieceArea, threshold: thr, model, low: tLow, table };
   }
 
   PH.segment = {

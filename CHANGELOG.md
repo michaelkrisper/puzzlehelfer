@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- Sweep 30 cm over the table with guidance: the photos taken lie faintly
+  over the live picture where they are, the one most in view framed, and a
+  dashed frame shows where that frame should be to stop (about half of the
+  picture new, counting all photos so far). There a big "Halt" in green,
+  and a photo as soon as the phone is held still; "Zurück" in red when too
+  far or lost. A small map shows all photos so far and the view on it. The
+  camera is followed by shift on small gray frames, against the frame
+  before and the photos taken (no drift while a photo is in view, found
+  again by a wide search after a jump). Held still a while over a strip
+  still missing, a photo there too.
+- Close-ups of the finished part: the part filling the picture no longer
+  passes for one huge piece (scale off by ten, photo then not laid on);
+  without loose pieces to measure, the scale of the photos of the same size
+  before. A close-up showing only puzzle at its border takes the table
+  colours of an earlier photo, if its own base colour is frequent in the
+  puzzle picture (plain sky): before, sky passed for table, and gaps for
+  occupied places and the other way round. On a synthetic sweep of the
+  18 October table all 10 photos are laid on and 81 free places agree
+  across them (before 3).
+- Photos are laid onto each other in photo pixels, the sweep's neighbours
+  first, each pair compared once (one comparison takes a second or more on
+  a phone).
+- Shown photos keep pieces at about 65 px (at least 1200, at most 2400 px):
+  a sweep brings many photos with large pieces.
+
 - "Tisch abfahren": the camera runs in the app; moving the phone over the
   table and holding it still for a moment takes a photo whenever it has
   moved on by about a third of the picture ("Foto jetzt" takes one at

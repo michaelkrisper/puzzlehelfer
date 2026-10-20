@@ -39,9 +39,14 @@ no photo leaves the device. The app's interface is in German.
 
 Several photos per round are possible (more pieces or close-ups; pick
 several at once with "Bild wählen"). Easiest is **Tisch abfahren**: the
-camera runs in the app; move the phone slowly over the table and hold it
-still for a moment every third of a picture, it takes a photo each time.
-All photos are put together into one picture of the table from above
+camera runs in the app; hold the phone about 30 cm over a corner of the
+puzzle and move it slowly over the table, row by row. The photos taken lie
+faintly over the live picture, the one most in view framed, and a dashed
+frame shows where that frame should be: there about half of the picture is
+new, the app shows "Halt" and takes a photo as soon as the phone is held
+still. A small map in the corner shows all photos so far. Holding still
+over a strip still missing (the last row along the edge) takes one there
+too. All photos are put together into one picture of the table from above
 ("Tisch von oben", the default with two or more): photos with some of the
 finished part by it, the others (close-ups of a tray) onto a photo they
 overlap. A photo that overlaps none is marked "nicht eingeordnet". The

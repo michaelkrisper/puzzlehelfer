@@ -127,21 +127,25 @@
   // All pixel sizes of the recognition (smoothing, noise, thresholds) are
   // tuned to pieces of about 90 px side length. A coarse pre-pass measures
   // the piece size, then the photo is scaled down to fit, never up.
+  // A close-up of the finished part has no loose pieces to measure, and the
+  // part itself passes for one huge piece: then the scale of the photos
+  // before it (hint), as in a sweep at one height.
   const TARGET_SIDE = 90;
-  function workScale(cv, img) {
+  function workScale(cv, img, hint, prior) {
     const f0 = Math.min(1, 1400 / Math.max(img.width, img.height));
     const small = resized(cv, img, f0);
     const seg = PH.segment.segmentScene(
       cv,
       small,
       PH.segment.rgbaToLab(small.data, small.width * small.height),
-      { refine: false, outlines: false, rim: false },
+      { refine: false, outlines: false, rim: false, prior },
     );
     seg.mask.delete();
     seg.bigMask.delete();
-    if (!seg.pieceArea) return 1;
+    if (!seg.pieceArea) return hint ?? 1;
     // Area of a piece ≈ core square; knobs and holes balance out.
     const side = Math.sqrt(seg.pieceArea) / f0;
+    if (side > Math.max(img.width, img.height) / 4) return hint ?? 1;
     return Math.min(1, TARGET_SIDE / side);
   }
 
@@ -363,14 +367,17 @@
     return groups;
   }
 
-  function analyzeScene(cv, input, ref, progress = () => {}) {
+  // From earlier photos (a sweep): scale, their working scale; table, the
+  // table colours (PH.segment.segmentScene).
+  function analyzeScene(cv, input, ref, progress = () => {}, before = {}) {
     progress('Teilgröße wird gemessen …');
-    const scale = workScale(cv, input);
+    const prior = { picture: ref.lab, table: before.table ?? null };
+    const scale = workScale(cv, input, before.scale ?? null, prior);
     const img = resized(cv, input, scale);
     const { width: w, height: h } = img;
     const lab = PH.segment.rgbaToLab(img.data, w * h);
     progress('Teile werden vom Tisch getrennt …');
-    const seg = PH.segment.segmentScene(cv, img, lab);
+    const seg = PH.segment.segmentScene(cv, img, lab, { prior });
     const src = cv.matFromImageData(img);
     const gray = new cv.Mat();
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
@@ -526,7 +533,18 @@
     src.delete();
     seg.mask.delete();
     seg.bigMask.delete();
-    return { width: w, height: h, scale, pieces, unclear, groups, board, view: board, pieceArea: A };
+    return {
+      width: w,
+      height: h,
+      scale,
+      pieces,
+      unclear,
+      groups,
+      board,
+      view: board,
+      pieceArea: A,
+      table: seg.table,
+    };
   }
 
   const planeOutline = (fine, Hi) =>
