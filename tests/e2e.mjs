@@ -184,6 +184,17 @@ try {
     return { width: info.width, sugg: state.result.suggestions.map((s) => ({ c: s.center, row: s.row, col: s.col, turn: s.turn, sure: s.sure })) };
   })()`);
   const k = res.width / truth.scene.width;
+  // With a finished part only places right next to it are suggested
+  // (core/pipeline.js), so only pieces that belong there count.
+  const tf = new Set((truth.filled ?? []).map(([r, c]) => r * truth.cols + c));
+  const next = (r, c) =>
+    [
+      [0, 1],
+      [1, 0],
+      [0, -1],
+      [-1, 0],
+    ].some(([dr, dc]) => c + dc >= 0 && c + dc < truth.cols && tf.has((r + dr) * truth.cols + c + dc));
+  const counted = tf.size ? truth.loose.filter((t) => next(t.row, t.col)) : truth.loose;
   let right = 0;
   let wrongSure = 0;
   for (const t of truth.loose) {
@@ -191,12 +202,12 @@ try {
     if (!s) continue;
     const dt = ((((s.turn + t.angle + 180) % 360) + 360) % 360) - 180;
     const good = s.row === t.row && s.col === t.col && Math.abs(dt) < 20;
-    if (good) right++;
-    else if (s.sure) wrongSure++;
+    if (good && counted.includes(t)) right++;
+    else if (!good && s.sure) wrongSure++;
   }
   check(
-    right >= truth.loose.length * 0.8,
-    `${right}/${truth.loose.length} pieces with right place and rotation`,
+    right >= counted.length * (tf.size ? 0.75 : 0.8),
+    `${right}/${counted.length} pieces with right place and rotation`,
   );
   if (partial) {
     check(await evaluate('!!state.result.scenes[0].board'), 'half-finished puzzle in photo detected');
@@ -235,9 +246,11 @@ try {
     'step card with candidate places and piece list',
   );
   await shot('4-step');
-  const before = await evaluate(`JSON.stringify(state.focus)`);
+  // Next to a finished part the steps go by gap, so skip moves to the next gap.
+  const shown = `state.gapMode ? 'gap ' + focusedGap()?.cell : JSON.stringify(state.focus)`;
+  const before = await evaluate(shown);
   await evaluate(`document.getElementById('step-skip').click()`);
-  check((await evaluate(`JSON.stringify(state.focus)`)) !== before, 'skip goes to the next piece');
+  check((await evaluate(shown)) !== before, 'skip goes to the next piece');
 
   // Details of one piece
   await evaluate(`(() => {

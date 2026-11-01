@@ -1238,14 +1238,17 @@
         // Shown as sure (green) only with independent support: feature points
         // on the same place, or an image comparison without any rival; and a
         // cleanly measured outline. Measured on 1054 labelled real pieces:
-        // 99 % of sure suggestions right instead of 86 %.
+        // 99 % of sure suggestions right instead of 86 %. The gap outline
+        // distance is set for finished parts of 40+ places; at smaller ones
+        // it rejected only right suggestions (synthetic, 4 seeds: all sure
+        // ones right up to 0.17), so there the knob/hole fit above is enough.
         const featOk = !!(it.feat?.inliers && it.feat.cell === ev.top.cell);
         const sure =
           !!ev.step &&
           ev.conf >= 0.6 &&
           (featOk || ev.conf >= 0.99) &&
           it.shape.quality >= 0.35 &&
-          (!fit || fit.worst < 0.07);
+          (!fit || filled.size < 40 || fit.worst < 0.07);
         return {
           ...base,
           ...describe(ev.top, it, scene, ref, moves),
