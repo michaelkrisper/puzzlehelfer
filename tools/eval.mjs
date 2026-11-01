@@ -120,6 +120,18 @@ export async function evaluate(dir, opts = {}) {
   const t3 = performance.now();
 
   const side = Math.sqrt(scene.pieceArea || 1);
+  // Places next to the finished part (half-finished scenes): only there may
+  // a piece be suggested.
+  const tf = new Set((truth.filled ?? []).map(([r, c]) => r * truth.cols + c));
+  const next = (r, c) =>
+    [
+      [0, 1],
+      [1, 0],
+      [0, -1],
+      [-1, 0],
+    ].some(([dr, dc]) => c + dc >= 0 && c + dc < truth.cols && tf.has((r + dr) * truth.cols + c + dc));
+  let attachable = 0;
+  let attachOk = 0;
   const rows = [];
   let found = 0;
   let cellOk = 0;
@@ -152,6 +164,10 @@ export async function evaluate(dir, opts = {}) {
     const rotGood = best.cell !== null && Math.abs(wrap(best.turn - needed)) < 20;
     if (cellGood) cellOk++;
     if (cellGood && rotGood) rotOk++;
+    if (tf.size && next(t.row, t.col)) {
+      attachable++;
+      if (cellGood && rotGood) attachOk++;
+    }
     if (best.sure ?? best.step) {
       accepted++;
       if (cellGood && rotGood) acceptedOk++;
@@ -175,12 +191,17 @@ export async function evaluate(dir, opts = {}) {
     cornerOk,
     cellOk,
     cellRotOk: rotOk,
+    attachable,
+    attachOk,
+    // Suggested places away from the finished part.
+    away: tf.size
+      ? sugg.filter((x) => x.cell !== null && x.cell !== undefined && !next(x.row, x.col)).length
+      : 0,
     accepted,
     acceptedOk,
     ms: { ref: Math.round(t1 - t0), scene: Math.round(t2 - t1), solve: Math.round(t3 - t2) },
   };
   if (scene.board && truth.filled) {
-    const tf = new Set(truth.filled.map(([r, c]) => r * truth.cols + c));
     const bf = new Set(scene.board.filled);
     res.board.filledWrong = [...bf].filter((x) => !tf.has(x)).length;
     res.board.filledMissed = [...tf].filter((x) => !bf.has(x)).length;

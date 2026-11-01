@@ -87,7 +87,13 @@
             <button type="button" class="btn small" id="mode-piece">Nach Teil</button>
           </div>
           <div id="step" class="step" hidden>
-            <div class="step-head"><b id="step-title"></b><span id="step-sub" class="muted"></span></div>
+            <div class="step-head">
+              <b id="step-title"></b><span id="step-sub" class="muted"></span>
+              <span class="step-tools">
+                <button type="button" class="mini wide" id="step-say" aria-pressed="false">Ansage</button>
+                <button type="button" class="mini wide" id="step-table">Am Tisch</button>
+              </span>
+            </div>
             <div class="step-pair">
               <figure><canvas id="step-a" width="360" height="360"></canvas><figcaption id="step-a-cap"></figcaption></figure>
               <figure><canvas id="step-b" width="360" height="360"></canvas><figcaption id="step-b-cap"></figcaption></figure>
@@ -95,7 +101,7 @@
             <div id="step-cands" class="cands"></div>
             <figure class="step-where">
               <canvas id="step-where" width="720" height="360"></canvas>
-              <figcaption>Hier liegt das Teil</figcaption>
+              <figcaption id="step-where-cap">Hier liegt das Teil</figcaption>
             </figure>
             <p id="step-text" class="step-text"></p>
             <div class="row step-buttons">
@@ -103,6 +109,7 @@
               <button type="button" class="btn" id="step-nofit">Passt nicht</button>
               <button type="button" class="btn" id="step-skip">Überspringen</button>
               <button type="button" class="btn" id="step-removed">Entfernen</button>
+              <button type="button" class="btn" id="step-undo" hidden>Rückgängig</button>
             </div>
           </div>
           <div class="viewer-wrap"><canvas id="viewer"></canvas></div>

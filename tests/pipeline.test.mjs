@@ -58,7 +58,9 @@ test('half-finished puzzle in photo: board and gaps', { timeout: 180000 }, async
     const { res } = await evaluate(dir);
     assert.ok(res.board, 'board found');
     assert.equal(res.board.filledWrong, 0, 'no wrongly filled places');
-    assert.ok(res.cellRotOk >= res.loose * 0.75, `right ${res.cellRotOk}/${res.loose}`);
+    // Only places next to the finished part are suggested.
+    assert.equal(res.away, 0, 'no place away from the finished part');
+    assert.ok(res.attachOk >= res.attachable * 0.75, `right ${res.attachOk}/${res.attachable}`);
     assert.equal(res.accepted, res.acceptedOk, 'all sure suggestions are right');
   } finally {
     rmSync(dir, { recursive: true, force: true });

@@ -872,11 +872,19 @@
     }
     // Holes in large areas (empty places in the finished part) stay free,
     // small holes (reflections, table-coloured spots in the motif) do not.
-    const bigIds = new Set(outer.filter((o) => o.area > unit * 2.4).map((o) => o.i));
-    for (const hole of holes) {
-      if (bigIds.has(hole.parent) && hole.area > unit * 0.12) {
-        cv.drawContours(mask, contours, hole.i, new cv.Scalar(0), -1);
-        cv.drawContours(bigMask, contours, hole.i, new cv.Scalar(0), -1);
+    // Largest first, each with its holes: an island of finished puzzle inside
+    // the finished border lies in the border's hole and is drawn again after
+    // it.
+    const bigOuter = outer.filter((o) => o.area > unit * 2.4).sort((a, b) => b.area - a.area);
+    const bigIds = new Set(bigOuter.map((o) => o.i));
+    for (const o of bigOuter) {
+      cv.drawContours(mask, contours, o.i, new cv.Scalar(255), -1);
+      cv.drawContours(bigMask, contours, o.i, new cv.Scalar(255), -1);
+      for (const hole of holes) {
+        if (hole.parent === o.i && hole.area > unit * 0.12) {
+          cv.drawContours(mask, contours, hole.i, new cv.Scalar(0), -1);
+          cv.drawContours(bigMask, contours, hole.i, new cv.Scalar(0), -1);
+        }
       }
     }
     // Loose pieces can lie in such a hole, e.g. inside the finished border.

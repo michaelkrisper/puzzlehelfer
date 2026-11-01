@@ -367,6 +367,37 @@
     return groups;
   }
 
+  // Islands lying clearly off their place (half a place or 5 degrees) are
+  // shown like joined groups: a letter, an arrow to where they belong and
+  // the turn. Pieces are suggested at their rims wherever they lie.
+  function islandGroups(board, ref) {
+    const { C, cols } = ref;
+    const out = [];
+    board.islands.forEach((isl, n) => {
+      if (Math.hypot(...isl.shift) < 0.5 && Math.abs(isl.turn) < 5) return;
+      let u = 0;
+      let v = 0;
+      for (const c of isl.cells) {
+        u += (c % cols) + 0.5;
+        v += Math.floor(c / cols) + 0.5;
+      }
+      u /= isl.cells.length;
+      v /= isl.cells.length;
+      const target = PH.board.toScene(board, u * C, v * C);
+      out.push({
+        outline: simplify(isl.contour, 3),
+        cells: isl.cells,
+        row: Math.floor(v),
+        col: Math.floor(u),
+        turn: PH.geom.wrapDeg(-isl.turn),
+        target,
+        inliers: isl.inliers,
+        island: n,
+      });
+    });
+    return out;
+  }
+
   // From earlier photos (a sweep): scale, their working scale; table, the
   // table colours (PH.segment.segmentScene).
   function analyzeScene(cv, input, ref, progress = () => {}, before = {}) {
@@ -398,7 +429,9 @@
     let board = null;
     if (seg.big.length) {
       progress('Fertiger Teil wird auf die Vorlage gelegt …');
-      board = PH.board.registerBoard(cv, ref, src, gray, seg.bigMask, sf);
+      // Scale the loose pieces show: a piece covers about a place.
+      const k = seg.pieceArea ? Math.sqrt(seg.pieceArea / 1.05) / ref.C : null;
+      board = PH.board.registerBoard(cv, ref, src, gray, seg.bigMask, sf, seg.big, k);
       if (board && !plausibleBoard(board, ref, seg)) board = null;
       if (board) board.border = borderThickness(board, ref, seg.bigMask);
       if (board && board.filled.length >= 40)
@@ -410,12 +443,16 @@
     let A = seg.pieceArea;
     let segPieces = seg.pieces;
     let segBig = seg.big;
+    // Islands of finished puzzle (core/board.js) are neither loose pieces nor
+    // groups to search.
+    const islandBlobs = new Set((board?.islandBig ?? []).map((j) => seg.big[j]));
     if (board) {
       A = cellArea(board, ref) * 1.05;
       const onBoard = onBoardTest(board, ref);
       segPieces = seg.pieces.filter((p) => p.area > 0.3 * A);
       segBig = [];
       for (const b of seg.big) {
+        if (islandBlobs.has(b)) continue;
         if (b.area < 2.4 * A && !onBoard(simplify(b.contour, 3))) {
           const touches = b.contour.some(([x, y]) => x <= 1 || y <= 1 || x >= w - 2 || y >= h - 2);
           segPieces.push({ ...b, alt: null, touches });
@@ -423,6 +460,7 @@
       }
     }
     const groups = sf ? locateGroups(cv, ref, sf, segBig, board) : [];
+    if (board) groups.push(...islandGroups(board, ref));
     const pieces = [];
     const unclear = [];
     // Without a finished part, large areas that are no assembled group are
@@ -1070,10 +1108,12 @@
           holes.push([`${(r + dy) * ref.cols + c + dx},${(d + 2) % 4}`, { need: -side.type, side }]);
       }
     }
-    // With a large finished part, only places right next to it: that is where
-    // one builds on, and the gap outlines there check every suggestion
-    // (plain-coloured pieces are told apart by shape alone).
-    const atEdge = filled.size >= 40;
+    // Always build on what is there: with a finished part, an island, a
+    // joined group or a piece put in, only places right next to them. That is
+    // where one goes on by hand (a single piece laid somewhere in the empty
+    // middle helps nobody), and the gap outlines there check every
+    // suggestion (plain-coloured pieces are told apart by shape alone).
+    const atEdge = filled.size > 0;
     if (atEdge) {
       const { cols, rows } = ref;
       const next = (c) => {
@@ -1160,7 +1200,8 @@
       }
     }
     const evOf = new Map(active.map((it, k) => [it, result.get(k)]));
-    const gapList = rims?.size ? gapCandidates(active, rims, scenes, ref, free) : [];
+    const moves = islandMoves(scenes);
+    const gapList = rims?.size ? gapCandidates(active, rims, scenes, ref, free, moves) : [];
     const done = [...placed.values()]
       .filter((p) => scenes[p.scene]?.pieces[p.index])
       .map((p) => ({
@@ -1192,7 +1233,7 @@
         let fit = null;
         if (atEdge) {
           fit = gapFit(it.sides, ev.top, gaps);
-          if (fit.bad || !fit.n) return { ...base, cell: null };
+          if (fit.bad || (!fit.n && gaps.size)) return { ...base, cell: null };
         }
         // Shown as sure (green) only with independent support: feature points
         // on the same place, or an image comparison without any rival; and a
@@ -1207,11 +1248,11 @@
           (!fit || fit.worst < 0.07);
         return {
           ...base,
-          ...describe(ev.top, it, scene, ref),
+          ...describe(ev.top, it, scene, ref, moves),
           conf: ev.conf,
           step: ev.step ?? null,
           sure,
-          alts: ev.alts.map((a) => ({ ...describe(a, it, scene, ref), p: a.p })),
+          alts: ev.alts.map((a) => ({ ...describe(a, it, scene, ref, moves), p: a.p })),
         };
       }),
     ];
@@ -1227,7 +1268,7 @@
   // all gaps, Sinkhorn). p: chance among the pieces that may go there.
   // Clearest gaps first.
   const GAP_T = 2; // evidence halved: the same piece on two photos often prefers another place
-  function gapCandidates(items, rims, scenes, ref, free) {
+  function gapCandidates(items, rims, scenes, ref, free, moves) {
     const cells = [...rims.keys()].filter((c) => free[c]);
     const best = cells.map((cell) =>
       items.map((it) => {
@@ -1280,7 +1321,7 @@
         index: x.it.index,
         center: x.it.shape.center,
         corners: x.it.shape.corners,
-        ...describe({ cell, rot: x.rot }, x.it, scenes[x.it.scene], ref),
+        ...describe({ cell, rot: x.rot }, x.it, scenes[x.it.scene], ref, moves),
         p: x.p,
       }));
       out.push({ cell, row: Math.floor(cell / ref.cols), col: cell % ref.cols, sides, cands });
@@ -1305,9 +1346,26 @@
     return { n, bad, worst };
   }
 
+  // Places of islands (core/board.js) over all photos: place → the island
+  // (move S on the table, where it belongs → where it lies, and its grid
+  // field). A place next to an island is shown at the island, wherever it
+  // lies.
+  function islandMoves(scenes) {
+    const out = new Map();
+    for (const s of scenes)
+      for (const [cell, n] of s.board?.owner ?? []) if (!out.has(cell)) out.set(cell, s.board.islands[n]);
+    return out;
+  }
+
+  // The photo's mapping, for a place of an island moved along.
+  function viewAt(view, cell, moves) {
+    const isl = moves?.get(cell);
+    return isl ? { H: PH.geom.mulH(view.H, isl.S), corr: view.corr, field: isl.field } : view;
+  }
+
   // Place, rotation (degrees clockwise, as the piece lies in the photo) and
   // target point in the photo if the puzzle is visible there.
-  function describe(cand, it, scene, ref) {
+  function describe(cand, it, scene, ref, moves = null) {
     const { cols, C } = ref;
     const row = Math.floor(cand.cell / cols);
     const col = cand.cell % cols;
@@ -1315,16 +1373,17 @@
     let target = null;
     let quad = null;
     if (scene.view) {
+      const v = viewAt(scene.view, cand.cell, moves);
       const cx = (col + 0.5) * C;
       const cy = (row + 0.5) * C;
-      target = PH.board.toScene(scene.view, cx, cy);
+      target = PH.board.toScene(v, cx, cy);
       quad = [
         [col, row],
         [col + 1, row],
         [col + 1, row + 1],
         [col, row + 1],
-      ].map(([x, y]) => PH.board.toScene(scene.view, x * C, y * C));
-      const t2 = PH.board.toScene(scene.view, cx + C, cy);
+      ].map(([x, y]) => PH.board.toScene(v, x * C, y * C));
+      const t2 = PH.board.toScene(v, cx + C, cy);
       psi = (Math.atan2(t2[1] - target[1], t2[0] - target[0]) * 180) / Math.PI;
     }
     const turn = PH.geom.wrapDeg(-it.shape.angle + cand.rot * 90 + psi);
@@ -1471,8 +1530,27 @@
           if (edge(s, c * C, r * C) > 0) pt = applyH(M, ...PH.board.toScene(s.view, c * C, r * C));
         corners.push(pt);
       }
+    // Places of islands where the island lies.
+    const moves = islandMoves(scenes);
+    const quads = [];
+    for (const [cell, isl] of moves) {
+      const r = Math.floor(cell / cols);
+      const c = cell % cols;
+      let q = null;
+      for (const { s, M } of list) {
+        if (edge(s, ...applyH(isl.S, (c + 0.5) * C, (r + 0.5) * C)) <= 0) continue;
+        const v = viewAt(s.view, cell, moves);
+        q = [
+          [c, r],
+          [c + 1, r],
+          [c + 1, r + 1],
+          [c, r + 1],
+        ].map(([x, y]) => applyH(M, ...PH.board.toScene(v, x * C, y * C)));
+      }
+      if (q) quads.push([cell, q]);
+    }
     const views = list.map(({ i, M }) => ({ scene: i, M }));
-    return { rgba: out, w: mw, h: mh, x0, y0, f, views, corners };
+    return { rgba: out, w: mw, h: mh, x0, y0, f, views, corners, quads };
   }
 
   PH.pipeline = { analyzeScene, solve, boardState, findDuplicates, tableView, placeScene };

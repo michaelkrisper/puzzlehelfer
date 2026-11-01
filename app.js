@@ -933,6 +933,7 @@ $('sweep-start').addEventListener('click', async () => {
   senseTake();
   window.addEventListener('devicemotion', onMotion);
   show('sweep', true);
+  keepAwake();
   sweepSay(SWEEP_SAY.start);
   sweep.timer = setInterval(sweepTick, 100);
 });
@@ -947,6 +948,7 @@ $('sweep-done').addEventListener('click', async () => {
   for (const t of sweep.stream?.getTracks() ?? []) t.stop();
   sweep.stream = null;
   show('sweep', false);
+  keepAwake();
   sweep.t = null;
   if (!sweep.n) return;
   setStatus(`${sweep.n} ${sweep.n === 1 ? 'Foto wird' : 'Fotos werden'} ausgewertet …`);
@@ -1181,6 +1183,7 @@ $('new-round').addEventListener('click', async () => {
   await call('clearScenes');
   renderThumbs();
   show('result', false);
+  keepAwake();
   setStatus('Setze die vorgeschlagenen Teile ein und fotografiere Puzzle und restliche Teile erneut.');
 });
 
@@ -1195,7 +1198,17 @@ async function tableImage() {
   c.height = r.h;
   c.getContext('2d').putImageData(new ImageData(r.rgba, r.w, r.h), 0, 0);
   const M = new Map(r.views.map((v) => [v.sceneId, { M: v.M, Mi: invertH(v.M) }]));
-  state.tableImg = { canvas: c, width: r.w, height: r.h, x0: r.x0, y0: r.y0, f: r.f, M, corners: r.corners };
+  state.tableImg = {
+    canvas: c,
+    width: r.w,
+    height: r.h,
+    x0: r.x0,
+    y0: r.y0,
+    f: r.f,
+    M,
+    corners: r.corners,
+    quads: new Map(r.quads),
+  };
   setStatus('');
   return state.tableImg;
 }
@@ -1281,6 +1294,7 @@ async function solve() {
   state.queue = order;
   renderResult();
   renderSteps();
+  keepAwake();
 }
 
 // ---------- Step by step ----------
@@ -1442,6 +1456,112 @@ function drawWhere(cv, x) {
   g.stroke();
 }
 
+// Where the piece lies and where it goes, in one picture: the table from
+// above (or the photo), cropped to both, the piece ringed, its place framed,
+// an arrow between. Without the place in a picture: where the piece lies.
+// Returns whether the place is shown.
+function drawRoute(cv, x, c) {
+  const s = state.scenes.find((v) => v.id === x.sceneId);
+  const info = state.result.scenes.find((v) => v.id === x.sceneId);
+  if (!s || !info || !x.center) return false;
+  const t = state.tableImg;
+  const m = t?.M.get(x.sceneId);
+  const tq = m && cellQuad(t, c.cell);
+  let img;
+  let map;
+  let quad;
+  if (tq) {
+    img = t.canvas;
+    map = (p) => applyH(m.M, p[0], p[1]);
+    quad = tq;
+  } else if (c.quad) {
+    const k = s.canvas.width / info.width;
+    img = s.canvas;
+    map = (p) => [p[0] * k, p[1] * k];
+    quad = c.quad.map(map);
+  } else {
+    drawWhere(cv, x);
+    return false;
+  }
+  if (cv.closest('.table')) {
+    const dpr = window.devicePixelRatio || 1;
+    cv.width = Math.round(cv.clientWidth * dpr);
+    cv.height = Math.round(cv.clientHeight * dpr);
+  }
+  const W = cv.width;
+  const H = cv.height;
+  const from = map(x.center);
+  const [a, b] = (x.corners ?? [x.center, [x.center[0] + 40, x.center[1]]]).map(map);
+  const side = Math.max(8, Math.hypot(b[0] - a[0], b[1] - a[1]));
+  const to = [0, 1].map((i) => quad.reduce((u, q) => u + q[i], 0) / 4);
+  // Both in view with a piece of margin, at the canvas's shape.
+  let x0 = Math.min(from[0] - 1.3 * side, ...quad.map((q) => q[0] - 0.8 * side));
+  let x1 = Math.max(from[0] + 1.3 * side, ...quad.map((q) => q[0] + 0.8 * side));
+  let y0 = Math.min(from[1] - 1.3 * side, ...quad.map((q) => q[1] - 0.8 * side));
+  let y1 = Math.max(from[1] + 1.3 * side, ...quad.map((q) => q[1] + 0.8 * side));
+  const sw = Math.max(x1 - x0, ((y1 - y0) * W) / H, 5 * side);
+  const sh = (sw * H) / W;
+  x0 = (x0 + x1 - sw) / 2;
+  y0 = (y0 + y1 - sh) / 2;
+  x1 = x0 + sw;
+  y1 = y0 + sh;
+  const f = W / sw;
+  const P = ([u, v]) => [(u - x0) * f, (v - y0) * f];
+  const g = cv.getContext('2d');
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.fillStyle = '#0b1016';
+  g.fillRect(0, 0, W, H);
+  g.drawImage(img, x0, y0, sw, sh, 0, 0, W, H);
+  const lw = Math.max(3, W / 160);
+  g.beginPath();
+  for (const q of quad) g.lineTo(...P(q));
+  g.closePath();
+  g.fillStyle = '#4fb3ff44';
+  g.fill();
+  g.strokeStyle = '#4fb3ff';
+  g.lineWidth = lw;
+  g.stroke();
+  const [px, py] = P(from);
+  const R = side * 0.95 * f;
+  g.beginPath();
+  g.arc(px, py, R, 0, Math.PI * 2);
+  g.strokeStyle = '#ffd23c';
+  g.lineWidth = lw * 1.3;
+  g.stroke();
+  // Arrow from the ring to the place.
+  const [qx, qy] = P(to);
+  const len = Math.hypot(qx - px, qy - py);
+  if (len > R + side * 0.6 * f) {
+    const ux = (qx - px) / len;
+    const uy = (qy - py) / len;
+    const s0 = [px + ux * R, py + uy * R];
+    const s1 = [qx - ux * side * 0.35 * f, qy - uy * side * 0.35 * f];
+    const hd = lw * 4;
+    for (const [col, w] of [
+      ['#000a', lw * 2.4],
+      ['#fff', lw],
+    ]) {
+      g.strokeStyle = col;
+      g.lineWidth = w;
+      g.beginPath();
+      g.moveTo(...s0);
+      g.lineTo(s1[0] - ux * hd * 0.5, s1[1] - uy * hd * 0.5);
+      g.stroke();
+    }
+    g.beginPath();
+    g.moveTo(...s1);
+    g.lineTo(s1[0] - ux * hd - uy * hd * 0.6, s1[1] - uy * hd + ux * hd * 0.6);
+    g.lineTo(s1[0] - ux * hd + uy * hd * 0.6, s1[1] - uy * hd - ux * hd * 0.6);
+    g.closePath();
+    g.fillStyle = '#fff';
+    g.strokeStyle = '#000a';
+    g.lineWidth = lw * 0.7;
+    g.fill();
+    g.stroke();
+  }
+  return true;
+}
+
 function drawCellTile(cv, row, col) {
   const { canvas, C } = state.refView;
   const m = C / 4;
@@ -1481,6 +1601,9 @@ function focusTarget() {
 }
 
 function renderSteps() {
+  $('step').classList.toggle('table', prefs.table);
+  $('step-table').textContent = prefs.table ? 'Schließen' : 'Am Tisch';
+  $('step-undo').hidden = !state.marks.length;
   const gaps = state.result?.gaps ?? [];
   if (!state.gapModeChosen) state.gapMode = gaps.length > 0;
   if (!gaps.length) state.gapMode = false;
@@ -1522,7 +1645,7 @@ function renderPieceStep() {
   $('step-a-cap').textContent = `Teil ${x.label}, so gedreht`;
   drawGapTile($('step-b'), c.row, c.col);
   $('step-b-cap').textContent = `R${c.row + 1} S${c.col + 1} · ${Math.round((c.p ?? 0) * 100)} %`;
-  drawWhere($('step-where'), x);
+  routeCaption(drawRoute($('step-where'), x, c));
   const box = $('step-cands');
   box.replaceChildren();
   cands.forEach((a, i) => {
@@ -1542,6 +1665,16 @@ function renderPieceStep() {
     box.append(b);
   });
   $('step-text').textContent = `Reihe ${c.row + 1}, Spalte ${c.col + 1}. ${turnText(c.turn)}`;
+  say(
+    `piece:${keyOf(x)}:${c.cell}`,
+    `Teil ${x.label}. ${turnText(c.turn)} Reihe ${c.row + 1}, Spalte ${c.col + 1}.`,
+  );
+}
+
+function routeCaption(shown) {
+  $('step-where-cap').textContent = shown
+    ? 'Gelber Ring: das Teil · blauer Rahmen: sein Platz'
+    : 'Hier liegt das Teil';
 }
 
 // A gap and the pieces whose outline fits it best: try them one by one.
@@ -1565,7 +1698,7 @@ function renderGapStep() {
   $('step-a-cap').textContent = 'Lücke';
   drawPieceTile($('step-b'), c, c.rot, SPAN);
   $('step-b-cap').textContent = `Teil ${alt + 1}, so gedreht · ${Math.round(c.p * 100)} %`;
-  drawWhere($('step-where'), c);
+  routeCaption(drawRoute($('step-where'), c, c));
   const box = $('step-cands');
   box.replaceChildren();
   g.cands.forEach((a, i) => {
@@ -1584,9 +1717,78 @@ function renderGapStep() {
     });
     box.append(b);
   });
-  $('step-text').textContent =
-    `Teil ${alt + 1} (Ring unten, Pfeil im Foto) hier probieren. ${turnText(c.turn)}`;
+  $('step-text').textContent = `Teil ${alt + 1} (gelber Ring) hier probieren. ${turnText(c.turn)}`;
+  say(
+    `gap:${g.cell}:${keyOf(c)}`,
+    `Lücke Reihe ${g.row + 1}, Spalte ${g.col + 1}. Teil im gelben Ring. ${turnText(c.turn)}`,
+  );
 }
+
+// ---------- At the table ----------
+// The phone lies by the pieces and the hands are busy: one try fills the
+// screen with big buttons, the screen stays on, and on request the step is
+// read out.
+const prefs = {
+  table: localStorage.getItem('ph-table') === '1',
+  speak: localStorage.getItem('ph-say') === '1',
+};
+
+function setTableMode(on) {
+  prefs.table = on;
+  localStorage.setItem('ph-table', on ? '1' : '0');
+  $('step').classList.toggle('table', on);
+  $('step-table').textContent = on ? 'Schließen' : 'Am Tisch';
+  if (state.result) renderSteps();
+}
+
+$('step-table').addEventListener('click', () => setTableMode(!prefs.table));
+$('step-say').addEventListener('click', () => {
+  prefs.speak = !prefs.speak;
+  localStorage.setItem('ph-say', prefs.speak ? '1' : '0');
+  $('step-say').setAttribute('aria-pressed', String(prefs.speak));
+  $('step-say').classList.toggle('on', prefs.speak);
+  said = '';
+  if (prefs.speak) renderSteps();
+  else speechSynthesis?.cancel();
+});
+$('step-say').setAttribute('aria-pressed', String(prefs.speak));
+$('step-say').classList.toggle('on', prefs.speak);
+$('step-say').hidden = !('speechSynthesis' in window);
+$('step-undo').addEventListener('click', () => $('undo-placed').click());
+window.addEventListener('resize', () => {
+  if (prefs.table && state.result) renderSteps();
+});
+
+// Read a step out once (key: the try shown).
+let said = '';
+function say(key, text) {
+  if (!prefs.speak || key === said || !('speechSynthesis' in window)) return;
+  said = key;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text.replace(/°/g, ' Grad'));
+  u.lang = 'de-DE';
+  speechSynthesis.speak(u);
+}
+
+// The screen stays on while suggestions are shown or the camera runs.
+let wake = null;
+async function keepAwake() {
+  const want = document.visibilityState === 'visible' && (!!state.result || !!sweep.stream);
+  try {
+    if (want && !wake && 'wakeLock' in navigator) {
+      wake = await navigator.wakeLock.request('screen');
+      wake.addEventListener('release', () => {
+        wake = null;
+      });
+    } else if (!want && wake) {
+      await wake.release();
+      wake = null;
+    }
+  } catch {
+    wake = null;
+  }
+}
+document.addEventListener('visibilitychange', keepAwake);
 
 $('mode-gap').addEventListener('click', () => {
   state.gapMode = true;
@@ -1877,8 +2079,10 @@ function filledCells() {
   return filled;
 }
 
-// Corners of a place in table pixels, null where no photo shows it.
+// Corners of a place in table pixels, null where no photo shows it. Places
+// of an island lie where the island lies.
 function cellQuad(t, cell) {
+  if (t.quads?.has(cell)) return t.quads.get(cell);
   const n = state.cols + 1;
   const r = Math.floor(cell / state.cols);
   const c = cell % state.cols;
