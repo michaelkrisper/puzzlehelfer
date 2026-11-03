@@ -3,17 +3,17 @@ description: Something does not work (camera, display, crash)
 labels: [bug]
 body:
   - type: textarea
-    id: was
+    id: what
     attributes:
       label: What happened, and what did you expect?
     validations:
       required: true
   - type: textarea
-    id: schritte
+    id: steps
     attributes:
       label: Steps to reproduce
   - type: input
-    id: geraet
+    id: device
     attributes:
       label: Device and browser
       placeholder: Pixel 9, Chrome 152
