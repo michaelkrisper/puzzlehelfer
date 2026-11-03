@@ -301,6 +301,7 @@
             A[3] += pv * qv;
             A[4] += qv * qv;
           }
+          // biome-ignore lint/complexity/useMathMinMax: hot inner loop, the ternary avoids a call
           s += d < T2 ? d : T2;
           ws++;
         }

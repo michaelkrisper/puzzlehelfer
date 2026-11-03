@@ -4,7 +4,8 @@ import { test } from 'node:test';
 
 const require = createRequire(import.meta.url);
 require('../core/geom.js');
-const { gridFor, gridFromBorder, borderCost, homography, applyH, mulH, invertH } = globalThis.PH.geom;
+const { gridFor, gridFromBorder, borderCost, homography, applyH, mulH, invertH, wrapDeg, polygonArea } =
+  globalThis.PH.geom;
 
 // Thickness of the finished part as measured on real photos of a 12 × 20
 // puzzle with rectangular pieces (two rows done at the bottom and right).
@@ -64,4 +65,30 @@ test('homography: invert and compose', () => {
     assert.ok(Math.hypot(cx - x, cy - y) < 1e-9);
   }
   assert.equal(invertH([1, 2, 3, 2, 4, 6, 0, 0, 1]), null);
+});
+
+test('wrapDeg maps angles into (-180, 180]', () => {
+  for (const [a, w] of [
+    [0, 0],
+    [180, 180],
+    [-180, 180],
+    [190, -170],
+    [-190, 170],
+    [720, 0],
+    [-540, 180],
+    [359.5, -0.5],
+  ])
+    assert.equal(wrapDeg(a), w, `wrapDeg(${a})`);
+});
+
+test('polygonArea is signed: positive counter-clockwise in y-up terms', () => {
+  const sq = [
+    [0, 0],
+    [4, 0],
+    [4, 3],
+    [0, 3],
+  ];
+  assert.equal(polygonArea(sq), 12);
+  assert.equal(polygonArea(sq.toReversed()), -12);
+  assert.equal(polygonArea([[1, 1]]), 0);
 });
