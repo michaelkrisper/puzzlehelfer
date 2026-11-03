@@ -15,6 +15,18 @@ no photo leaves the device. The app's interface is in German.
   <img src="docs/screenshot.png" width="420" alt="Part of the result view: puzzle pieces on a wooden table, each with a number and a white curved arrow showing direction and degrees of rotation">
 </p>
 
+## Features
+
+- Finds every piece in a photo of the table and suggests its place and rotation
+- Compares pieces with the box picture (image comparison plus SIFT/BRISK
+  feature points) and checks knobs, holes and straight edges
+- Uses the half-finished puzzle in the photo: occupied places, colour
+  calibration and the exact outline of each gap
+- Guided sweep over a large table with the live camera; photos are stitched
+  into one top-down view
+- Gap-by-gap mode for the last plain pieces, with fit/no-fit feedback
+- Installable PWA that works offline
+
 ## Usage
 
 1. **Reference:** take a photo of the finished picture (box lid or poster) or
@@ -145,6 +157,11 @@ flowchart LR
   of the pieces) and the cell size at every point of the table. Groups of
   pieces you joined yourself are located as a whole.
 
+## Privacy
+
+All processing happens on the device in a web worker. Photos are never
+uploaded; there is no server component, no account and no tracking.
+
 ## Development
 
 Vanilla JS without a build step, OpenCV.js in a web worker
@@ -153,6 +170,7 @@ Vanilla JS without a build step, OpenCV.js in a web worker
 ```sh
 npm install
 npm run serve          # http://localhost:8793
+npm test               # unit and recognition tests (node --test)
 npm run check          # Biome + tests
 npm run test:e2e       # headless Chrome, starts its own server
 ```
