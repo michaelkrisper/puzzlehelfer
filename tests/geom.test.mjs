@@ -4,7 +4,7 @@ import { test } from 'node:test';
 
 const require = createRequire(import.meta.url);
 require('../core/geom.js');
-const { gridFor, gridFromBorder, borderCost } = globalThis.PH.geom;
+const { gridFor, gridFromBorder, borderCost, homography, applyH, mulH, invertH } = globalThis.PH.geom;
 
 // Thickness of the finished part as measured on real photos of a 12 × 20
 // puzzle with rectangular pieces (two rows done at the bottom and right).
@@ -34,4 +34,34 @@ test('square pieces: the border does not overrule a fitting grid', () => {
 test('no border, no grid', () => {
   assert.equal(gridFromBorder(240, {}, aspect), null);
   assert.equal(gridFromBorder(240, null, aspect), null);
+});
+
+test('homography: invert and compose', () => {
+  const H = homography(
+    [
+      [0, 0],
+      [100, 0],
+      [100, 80],
+      [0, 80],
+    ],
+    [
+      [12, 7],
+      [118, 15],
+      [109, 101],
+      [4, 88],
+    ],
+  );
+  const Hi = invertH(H);
+  for (const [x, y] of [
+    [0, 0],
+    [50, 40],
+    [100, 80],
+  ]) {
+    const [u, v] = applyH(H, x, y);
+    const [bx, by] = applyH(Hi, u, v);
+    assert.ok(Math.hypot(bx - x, by - y) < 1e-9);
+    const [cx, cy] = applyH(mulH(Hi, H), x, y);
+    assert.ok(Math.hypot(cx - x, cy - y) < 1e-9);
+  }
+  assert.equal(invertH([1, 2, 3, 2, 4, 6, 0, 0, 1]), null);
 });
