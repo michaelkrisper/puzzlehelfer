@@ -1,7 +1,13 @@
 // Precache everything; after that the app needs no network.
 // Bump VERSION whenever any of these files changes, together with
 // APP_VERSION in app.js (shown in the header).
-const VERSION = 'v41';
+const VERSION = 'v42';
+// All apps on michaelkrisper.github.io share one origin and thus one
+// CacheStorage, so the cache name carries the app's prefix and cleanup only
+// touches this app's caches (plus the unprefixed 'vN' names used up to v41).
+const PREFIX = 'puzzlehelfer-';
+const CACHE = PREFIX + VERSION;
+const LEGACY = /^v\d+$/;
 const FILES = [
   './',
   'index.html',
@@ -31,7 +37,7 @@ const FILES = [
 self.addEventListener('install', (e) => {
   e.waitUntil(
     caches
-      .open(VERSION)
+      .open(CACHE)
       .then((c) => c.addAll(FILES))
       .then(() => self.skipWaiting()),
   );
@@ -41,7 +47,13 @@ self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== VERSION).map((k) => caches.delete(k))))
+      .then((keys) =>
+        Promise.all(
+          keys
+            .filter((k) => (k.startsWith(PREFIX) && k !== CACHE) || LEGACY.test(k))
+            .map((k) => caches.delete(k)),
+        ),
+      )
       .then(() => self.clients.claim()),
   );
 });

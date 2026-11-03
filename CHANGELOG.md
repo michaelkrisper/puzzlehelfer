@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Service worker: the offline cache is named `puzzlehelfer-<version>` and
+  cleanup only removes this app's caches; before, opening the app deleted the
+  offline caches of every other app on michaelkrisper.github.io.
 - Sweep with the phone's motion sensors (no permission needed in Chrome):
   - The photo is taken when the hand is calmest (gyroscope), not just when
     the picture stands still: sharper photos.
