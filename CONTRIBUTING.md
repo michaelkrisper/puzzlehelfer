@@ -4,7 +4,7 @@ Bug reports, photos with misdetections and pull requests are welcome.
 
 ## Setup
 
-Requirements: Node.js 24, Google Chrome (for the browser test) and Python 3
+Requirements: Node.js 24 or newer (CI uses 26, see `.nvmrc`), Google Chrome (for the browser test) and Python 3
 with NumPy and Pillow (for the test photos from `tools/synth.py`).
 
 ```sh

@@ -3,6 +3,8 @@
 [![CI](https://github.com/michaelkrisper/puzzlehelfer/actions/workflows/ci.yml/badge.svg)](https://github.com/michaelkrisper/puzzlehelfer/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![PWA](https://img.shields.io/badge/PWA-works%20offline-5a0fc8)](https://michaelkrisper.github.io/puzzlehelfer/)
+[![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A524-339933)](.nvmrc)
+[![Live demo](https://img.shields.io/badge/demo-GitHub%20Pages-222)](https://michaelkrisper.github.io/puzzlehelfer/)
 
 Take a photo of jigsaw pieces and find out where they belong and which way
 round. The app compares every piece with the picture on the box and checks
@@ -165,14 +167,18 @@ uploaded; there is no server component, no account and no tracking.
 ## Development
 
 Vanilla JS without a build step, OpenCV.js in a web worker
-([`worker.js`](worker.js)).
+([`worker.js`](worker.js)). Requires Node.js 24 or newer for the tooling
+(CI uses the version in [`.nvmrc`](.nvmrc)), Python 3 for the test photos and
+Google Chrome for the browser test (override with `CHROME=/path/to/chrome`).
 
 ```sh
-npm install
+npm ci
 npm run serve          # http://localhost:8793
 npm test               # unit and recognition tests (node --test)
+npm run lint           # Biome (format + lint)
 npm run check          # Biome + tests
 npm run test:e2e       # headless Chrome, starts its own server
+pipx run ruff check tools && pipx run ruff format --check tools
 ```
 
 The tests need `python3` with `numpy` and `Pillow`:
