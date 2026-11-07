@@ -1280,13 +1280,19 @@
   // The real piece grid from the seams of the finished part: the box
   // picture often shows a little more or less than the puzzle, then the grid
   // laid over the box misses the pieces by a fraction of a place (measured:
-  // rows 0.94 places high, shifted by a third). The scene is mapped into the
-  // reference at F px per reference px; seams are thin dark lines (black-hat),
-  // averaged per column and row over occupied places; per axis the period and
-  // phase with the strongest comb, and the outer edges of the finished part.
-  // Result in places of the current grid, or null if the seams are unclear.
+  // rows 0.94 places high, shifted by a third), and the piece count alone
+  // does not fix columns and rows (240 = 12 × 20, not 14 × 17). The scene is
+  // mapped into the reference at F px per reference px; seams are thin dark
+  // lines (black-hat), averaged per column and row over occupied places. Per
+  // axis the comb strength (relative to twice the mean) and best phase for
+  // periods 0.72..1.38 of the current place, and the outer edges of the
+  // finished part, all in places of the current grid; PH.geom.gridFromSeams
+  // picks the grid. Null without a finished part.
   function seamGrid(cv, board, ref, sceneGray, bigMask) {
     const F = 2;
+    const P0 = 0.72;
+    const DP = 0.002;
+    const NP = 331;
     const { C, cols, rows } = ref;
     // Without the local field: it already pulls the grid onto the seams.
     const { d, m, W, H } = seamImage(cv, { H: board.H, corr: board.corr }, ref, sceneGray, bigMask, F);
@@ -1306,7 +1312,7 @@
         ny[y]++;
       }
     }
-    const axis = (p, n, count) => {
+    const axis = (p, n, count, across) => {
       for (let i = 0; i < p.length; i++) p[i] = n[i] ? p[i] / n[i] : 0;
       let base = 0;
       let nb = 0;
@@ -1316,48 +1322,43 @@
           nb++;
         }
       base /= Math.max(1, nb);
-      const cF = C * F;
-      let best = null;
-      for (let per = 0.85 * cF; per <= 1.15 * cF; per += 0.002 * cF) {
-        for (let ph = 0; ph < per; ph += 0.5) {
-          let sc = 0;
-          let hits = 0;
-          for (let x = ph; x < p.length - 1; x += per) {
-            const i = Math.round(x);
-            if (!n[i]) continue;
-            sc += p[i] + 0.5 * (p[i - 1] + p[i + 1]);
-            hits++;
-          }
-          if (hits < count * 0.4) continue;
-          sc /= hits;
-          if (!best || sc > best.sc) best = { sc, per, ph };
-        }
-      }
-      // Clear comb and a period inside the search range, else no claim.
-      const period = best ? best.per / cF : 0;
-      if (!best || best.sc < 1.2 * 2 * base || period < 0.87 || period > 1.13) return null;
-      // Outer edges of the finished part, snapped to the nearest seams.
+      // Outer edges of the finished part.
       let lo = -1;
       let hi = -1;
       for (let i = 0; i < p.length; i++)
-        if (n[i] > 0.02 * (p.length === W ? H : W)) {
+        if (n[i] > 0.02 * across) {
           if (lo < 0) lo = i;
           hi = i;
         }
-      if (lo < 0) return null;
-      const snap = (v) => best.ph + Math.round((v - best.ph) / best.per) * best.per;
-      const a = snap(lo);
-      const b = snap(hi + 1);
-      return {
-        from: a / cF,
-        to: b / cF,
-        n: Math.round((b - a) / best.per),
-        period: best.per / cF,
-        strength: best.sc / (2 * base),
-      };
+      if (lo < 0 || !base) return null;
+      const cF = C * F;
+      const sc = new Array(NP).fill(0);
+      const ph = new Array(NP).fill(0);
+      for (let k = 0; k < NP; k++) {
+        const q = P0 + k * DP;
+        const per = q * cF;
+        for (let o = 0; o < per; o += 0.5) {
+          let s = 0;
+          let hits = 0;
+          for (let x = o; x < p.length - 1; x += per) {
+            const i = Math.round(x);
+            if (!n[i]) continue;
+            s += p[i] + 0.5 * ((p[i - 1] ?? 0) + (p[i + 1] ?? 0));
+            hits++;
+          }
+          // The comb must meet at least 40 % of the seams at this period.
+          if (hits < (0.4 * count) / q) continue;
+          s /= hits * 2 * base;
+          if (s > sc[k]) {
+            sc[k] = s;
+            ph[k] = o / cF;
+          }
+        }
+      }
+      return { lo: lo / cF, hi: (hi + 1) / cF, p0: P0, dp: DP, sc, ph };
     };
-    const gx = axis(px, nx, cols);
-    const gy = axis(py, ny, rows);
+    const gx = axis(px, nx, cols, H);
+    const gy = axis(py, ny, rows, W);
     return gx && gy ? { x: gx, y: gy } : null;
   }
 

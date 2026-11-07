@@ -1,11 +1,11 @@
 // UI: capture and crop the reference, add pieces photos,
 // draw suggestions with arrows and rotation.
-const { gridFor, gridFromBorder, borderCost, applyH, invertH } = PH.geom;
+const { gridFor, gridChoices, gridFromBorder, borderCost, applyH, invertH } = PH.geom;
 const REF_MAX = 2400;
 const SCENE_MAX = 4000;
 const COUNTS = [100, 200, 300, 500, 1000, 1500, 2000];
 // Same as VERSION in sw.js; bump both together.
-const APP_VERSION = 'v42';
+const APP_VERSION = 'v43';
 const ARROWS = 6;
 const $ = (id) => document.getElementById(id);
 
@@ -436,6 +436,7 @@ async function applyReference() {
     quad: state.quad,
     cols: state.cols,
     rows: state.rows,
+    count: state.count,
     cache: state.featCache,
   });
   if (r.cache) {
@@ -490,6 +491,23 @@ function updateGridLabels() {
   $('rows').textContent = state.rows;
   $('grid-total').textContent = `= ${state.cols * state.rows} Plätze`;
   for (const b of $('chips').children) b.classList.toggle('on', Number(b.dataset.n) === state.count);
+  // Grids that fit the count and the picture, to pick one with a tap.
+  const box = $('grid-chips');
+  box.replaceChildren();
+  const gs = state.count && state.quad ? gridChoices(state.count, quadAspect(state.quad)) : [];
+  if (!gs.some((g) => g.cols === state.cols && g.rows === state.rows))
+    gs.push({ cols: state.cols, rows: state.rows });
+  if (gs.length > 1)
+    for (const g of gs.sort((a, b) => a.cols - b.cols)) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = `${g.cols} × ${g.rows}`;
+      b.classList.toggle('on', g.cols === state.cols && g.rows === state.rows);
+      b.addEventListener('click', () => setGrid(g.cols, g.rows));
+      box.append(b);
+    }
+  $('grid-note').textContent = state.gridNote;
+  show('grid-note', !!state.gridNote);
 }
 
 for (const n of COUNTS) {
@@ -520,14 +538,19 @@ async function setCount(n) {
   await saveRef();
   await applyReference();
 }
+async function setGrid(cols, rows) {
+  state.cols = cols;
+  state.rows = rows;
+  state.gridManual = true;
+  state.gridNote = '';
+  await saveRef();
+  await applyReference();
+}
 for (const b of document.querySelectorAll('[data-adj]')) {
-  b.addEventListener('click', async () => {
-    const key = b.dataset.adj;
-    state[key] = Math.max(2, state[key] + Number(b.dataset.d));
-    state.gridManual = true;
-    state.gridNote = '';
-    await saveRef();
-    await applyReference();
+  b.addEventListener('click', () => {
+    const g = { cols: state.cols, rows: state.rows };
+    g[b.dataset.adj] = Math.max(2, g[b.dataset.adj] + Number(b.dataset.d));
+    setGrid(g.cols, g.rows);
   });
 }
 $('ref-redo').addEventListener('click', () => {
@@ -1020,18 +1043,22 @@ async function analyze(s, thenSolve) {
 
 // The seams of a finished part show where the pieces really are: the box
 // picture often shows a little more or less than the puzzle, and the count
-// alone does not fix columns and rows. Adopt corners and grid once, if they
-// fit the piece count and the grid was not set by hand.
+// alone does not fix columns and rows (worker.js seamQuad). Adopt corners and
+// grid once, if they fit the piece count and the grid was not set by hand.
 async function gridFromSeams(r) {
   const g = r?.seams;
-  if (!g || state.gridManual || state.seamsDone || g.shift < 0.15) return false;
+  if (!g || state.gridManual || state.seamsDone) return false;
+  const changed = g.cols !== state.cols || g.rows !== state.rows;
+  if (!changed && g.shift < 0.15) return false;
   if (state.count && Math.abs(g.cols * g.rows - state.count) > 0.06 * state.count) return false;
   state.seamsDone = true;
   state.gridAuto = true;
+  state.gridNote = changed
+    ? `Raster aus den Fugen des fertigen Teils erkannt: ${g.cols} × ${g.rows} statt ${state.cols} × ${state.rows}.`
+    : `Raster an den Fugen des fertigen Teils ausgerichtet: ${g.cols} × ${g.rows}.`;
   state.quad = g.quad;
   state.cols = g.cols;
   state.rows = g.rows;
-  state.gridNote = `Raster an den Fugen des fertigen Teils ausgerichtet: ${g.cols} × ${g.rows}.`;
   await saveRef();
   await applyReference();
   return true;
@@ -1040,9 +1067,9 @@ async function gridFromSeams(r) {
 // The grid from the piece count assumes square pieces. The finished border
 // in a photo is one piece thick and tells the real grid: switch once (all
 // photos are analysed again), unless the grid was set by hand or already
-// fits.
+// fits. Clear seams that fit the current grid outrank the border.
 async function gridFromPhoto(r) {
-  if (state.gridManual || state.gridAuto || !r?.border) return false;
+  if (state.gridManual || state.gridAuto || r?.seams || !r?.border) return false;
   const g = gridFromBorder(state.count, r.border, r.aspect);
   const now = borderCost(state.count, r.border, r.aspect, state.cols, state.rows);
   if (!g || now === null || now < 0.01 || g.cost > now / 3) return false;

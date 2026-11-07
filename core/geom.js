@@ -90,6 +90,74 @@
     return { cols: best.cols, rows: best.rows };
   }
 
+  // The grid the seams of a finished part show. seams per axis (core/board.js
+  // seamGrid, in places of the current cols × rows): comb strength sc and
+  // phase ph for the periods p0 + i·dp, outer edges lo..hi of the part.
+  // Candidates have about n pieces (6 %) of at most 1.4:1 (aspect: picture
+  // width / height) and score their strongest comb on both axes, less a
+  // little per piece off n. The box picture shows a little more or less than
+  // the puzzle: the period lies near current extent / pieces, or part extent
+  // / pieces where the part spans the axis (the frame); there the outer edges
+  // must lie on the comb. On real photos the comb of a wrong grid misses them
+  // by about half a place. Another grid needs a clearly better score than
+  // the current one. Edges in current places: the frame's, else the current
+  // ones. Null if the seams are unclear.
+  function gridFromSeams(seams, n, aspect, cols, rows) {
+    if (!seams?.x || !seams?.y) return null;
+    const axis = (a, K, k) => {
+      const frame = a.hi - a.lo > 0.9 * K;
+      const q0 = ((frame ? a.hi - a.lo : K) / k) * 0.97;
+      const q1 = (K / k) * 1.03;
+      let best = null;
+      for (let i = 0; i < a.sc.length; i++) {
+        const per = a.p0 + i * a.dp;
+        if (per < q0 || per > q1 || (best && a.sc[i] <= best.s)) continue;
+        if (!frame) {
+          best = { s: a.sc[i], from: 0, to: K };
+          continue;
+        }
+        const snap = (v) => a.ph[i] + Math.round((v - a.ph[i]) / per) * per;
+        const from = snap(a.lo);
+        const to = snap(a.hi);
+        const off = Math.max(Math.abs(from - a.lo), Math.abs(to - a.hi)) / per;
+        if (off <= 0.3 && Math.round((to - from) / per) === k) best = { s: a.sc[i], from, to };
+      }
+      return best;
+    };
+    const score = (c, r) => {
+      const x = axis(seams.x, cols, c);
+      const y = axis(seams.y, rows, r);
+      const s = (x?.s ?? 0) + (y?.s ?? 0) - (2 * Math.abs(c * r - n)) / n;
+      return { cols: c, rows: r, x, y, s, ok: x?.s >= 1.2 && y?.s >= 1.2 };
+    };
+    const now = score(cols, rows);
+    let best = null;
+    for (let r = 2; r <= n / 2; r++) {
+      for (let c = Math.max(2, Math.ceil((0.94 * n) / r)); c <= (1.06 * n) / r; c++) {
+        if (Math.abs(Math.log((aspect * r) / c)) > Math.log(1.4)) continue;
+        const g = score(c, r);
+        if (g.ok && (!best || g.s > best.s)) best = g;
+      }
+    }
+    const g = best && (best.cols !== cols || best.rows !== rows) && best.s >= 1.1 * now.s ? best : now;
+    return g.ok ? { cols: g.cols, rows: g.rows, x: g.x, y: g.y, s: g.s, now: now.s } : null;
+  }
+
+  // Grids to offer next to the one from gridFor: factor pairs of n, else
+  // products within 1 %, with pieces of at most 1.4:1, closest to n first.
+  function gridChoices(n, aspect) {
+    const out = [];
+    for (let rows = 2; rows <= n / 2; rows++) {
+      for (const cols of new Set([Math.floor(n / rows), Math.ceil(n / rows)])) {
+        const cnt = Math.abs(cols * rows - n) / n;
+        const piece = Math.abs(Math.log((aspect * rows) / cols));
+        if (cols >= 2 && cnt <= 0.01 && piece <= Math.log(1.4)) out.push({ cols, rows, cnt, piece });
+      }
+    }
+    out.sort((a, b) => a.cnt - b.cnt || a.piece - b.piece);
+    return out.slice(0, 3).map(({ cols, rows }) => ({ cols, rows }));
+  }
+
   // Angle in degrees to (-180, 180].
   // How badly cols × rows fits the thickness of the finished part per side
   // (share of picture height for top/bottom, width for left/right, see
@@ -152,6 +220,8 @@
     mulH,
     invertH,
     gridFor,
+    gridChoices,
+    gridFromSeams,
     borderCost,
     gridFromBorder,
     wrapDeg,

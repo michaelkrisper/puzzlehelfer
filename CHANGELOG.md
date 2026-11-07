@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Grid from the finished part: its seams now also correct the number of
+  columns and rows, not only their position (240 pieces: 12 × 20 instead of
+  14 × 17, before stuck at the guess for square pieces). The reference tab
+  offers the grids that fit the piece count as chips, one tap picks one.
 - Service worker: the offline cache is named `puzzlehelfer-<version>` and
   cleanup only removes this app's caches; before, opening the app deleted the
   offline caches of every other app on michaelkrisper.github.io.

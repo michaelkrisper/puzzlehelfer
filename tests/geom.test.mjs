@@ -4,8 +4,18 @@ import { test } from 'node:test';
 
 const require = createRequire(import.meta.url);
 require('../core/geom.js');
-const { gridFor, gridFromBorder, borderCost, homography, applyH, mulH, invertH, wrapDeg, polygonArea } =
-  globalThis.PH.geom;
+const {
+  gridFor,
+  gridChoices,
+  gridFromBorder,
+  borderCost,
+  homography,
+  applyH,
+  mulH,
+  invertH,
+  wrapDeg,
+  polygonArea,
+} = globalThis.PH.geom;
 
 // Thickness of the finished part as measured on real photos of a 12 × 20
 // puzzle with rectangular pieces (two rows done at the bottom and right).
@@ -30,6 +40,12 @@ test('square pieces: the border does not overrule a fitting grid', () => {
   const b = { top: 1 / 27, bottom: 1 / 27, left: 1 / 38, right: 1 / 38 };
   assert.ok(borderCost(1000, b, 38 / 27, 38, 26) < 0.01);
   assert.ok(borderCost(1000, b, 38 / 27, 37, 27) < 0.01);
+});
+
+test('grid choices: factor pairs that fit the picture', () => {
+  const gs = gridChoices(240, aspect).map((g) => `${g.cols}x${g.rows}`);
+  assert.ok(gs.includes('12x20') && gs.includes('15x16'), gs.join(' '));
+  assert.ok(!gs.includes('10x24') && !gs.includes('20x12'), gs.join(' '));
 });
 
 test('no border, no grid', () => {

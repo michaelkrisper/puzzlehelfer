@@ -25,6 +25,7 @@ const ready = new Promise((resolve) => self.cv.then(resolve)).then((m) => {
 
 let ref = null;
 let refQuad = null;
+let refCount = 0; // piece count from the box
 const scenes = new Map(); // id → result of analyzeScene
 const previews = new Map(); // id → photo at most 2400 px, for the table view
 const points = new Map(); // id → ORB points, to lay photos onto each other
@@ -120,10 +121,18 @@ const viewMax = (image, s) =>
 const progressFor = (id) => (text) => postMessage({ type: 'progress', id, text });
 
 // The reference corners and grid that the seams of a finished part show
-// (in places of the current grid), mapped back onto the reference photo.
-function seamQuad(g) {
-  if (!g || !refQuad) return null;
+// (PH.geom.gridFromSeams), mapped back onto the reference photo.
+function seamQuad(seams) {
+  if (!seams || !refQuad) return null;
   const { W, H, C } = ref;
+  const g = PH.geom.gridFromSeams(
+    seams,
+    refCount || ref.cols * ref.rows,
+    ref.hi.w / ref.hi.h,
+    ref.cols,
+    ref.rows,
+  );
+  if (!g) return null;
   const Hq = PH.geom.homography(
     [
       [0, 0],
@@ -136,8 +145,8 @@ function seamQuad(g) {
   const at = (u, v) => PH.geom.applyH(Hq, u * C, v * C);
   return {
     quad: [at(g.x.from, g.y.from), at(g.x.to, g.y.from), at(g.x.to, g.y.to), at(g.x.from, g.y.to)],
-    cols: g.x.n,
-    rows: g.y.n,
+    cols: g.cols,
+    rows: g.rows,
     // Largest correction of a grid line, in places.
     shift: Math.max(
       Math.abs(g.x.from),
@@ -152,8 +161,9 @@ const handlers = {
   quad({ image }) {
     return { quad: PH.reference.findPictureQuad(cv, image) };
   },
-  reference({ image, quad, cols, rows, cache }) {
+  reference({ image, quad, cols, rows, count, cache }) {
     refQuad = quad;
+    refCount = count;
     const prev = ref ?? cache;
     ref = PH.reference.buildReference(cv, image, quad, cols, rows, prev);
     // Places depend on the grid, so old analyses no longer fit.
