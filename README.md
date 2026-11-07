@@ -193,7 +193,9 @@ python3 tools/synth.py --image tests/fixtures/picture.jpg --pieces 100 --seed 1 
 node tools/bench.mjs /path/scene [--badref]
 ```
 
-After changing app files, bump `VERSION` in [`sw.js`](sw.js).
+Every successful merge on main is a patch release: CI raises the version
+and tags it ([`tools/release.mjs`](tools/release.mjs), see
+[CONTRIBUTING.md](CONTRIBUTING.md)).
 
 ## Limits
 

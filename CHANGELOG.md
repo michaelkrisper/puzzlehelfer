@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Semantic versions, shown in the header: every successful merge on main
+  raises the patch version (0.45.1, 0.45.2, …); CI sets it, tags the release
+  and turns this heading into the version.
+
+## 0.45.0 – 2026-11-07
+
+Was v45; before, plain counters v1 … v45.
+
 - Step cards: the gap shows the reference faintly inside its frame, so the
   motif to look for is right there (also in "Nach Teil" and "Am Tisch").
   Turns are said in quarter turns ("Vierteldrehung nach rechts", "halbe
@@ -338,7 +346,7 @@
 - Documentation, comments and code in English; the user interface stays
   German.
 
-## 1.0.0 – 2026-10-10
+## v1 – 2026-10-10
 
 - Reference from the box lid: picture border found automatically and
   adjustable by hand, grid from piece count and aspect ratio.

@@ -28,8 +28,11 @@ CI runs the same steps, plus Ruff for `tools/*.py`.
 
 ## Notes
 
-- Changes to app files: bump `VERSION` in `sw.js`, otherwise the service
-  worker keeps serving the old version.
+- Versions are semantic. Every successful merge on main is a patch release:
+  CI raises `VERSION` in `sw.js` (the service worker's cache), `APP_VERSION`
+  in `app.js` and `version` in `package.json`, names the "Unreleased"
+  section of `CHANGELOG.md` after it and tags it (`tools/release.mjs`).
+  Write changes under "## Unreleased"; raise the minor version by hand.
 - Measure changes to the recognition with `tools/bench.mjs` over several
   scenes from `tools/synth.py`, also with `--badref`, and state the numbers
   before/after in the pull request. What matters most is "sure, of which
