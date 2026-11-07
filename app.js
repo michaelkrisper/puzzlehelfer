@@ -5,7 +5,7 @@ const REF_MAX = 2400;
 const SCENE_MAX = 4000;
 const COUNTS = [100, 200, 300, 500, 1000, 1500, 2000];
 // Same as VERSION in sw.js; bump both together.
-const APP_VERSION = 'v44';
+const APP_VERSION = 'v45';
 const ARROWS = 6;
 const $ = (id) => document.getElementById(id);
 
@@ -1327,6 +1327,19 @@ async function solve() {
 // ---------- Step by step ----------
 const keyOf = (x) => `${x.sceneId}:${x.index}`;
 
+// A place: short on tiles and chips, spelled out in sentences and speech.
+const placeShort = (row, col) => `R${row + 1} S${col + 1}`;
+const placeLong = (row, col) => `Reihe ${row + 1}, Spalte ${col + 1}`;
+const pct = (p) => `${Math.round((p ?? 0) * 100)} %`;
+
+// Below this a try is marked unsure: still offered, not recommended.
+const UNSURE = 0.1;
+// Candidates far below the best only distract (0 % next to 99 %): left out.
+const farBelow = (p, best) => p < 0.005 || p < best / 10 || (p < 0.05 && p < best / 2);
+const bestOf = (list) => Math.max(...list.map((a) => a.p ?? 0));
+// Degrees a piece may lie off and still counts as not to be turned.
+const STILL = 20;
+
 function queue() {
   const q = state.queue ?? [];
   return [...q.filter((x) => !state.skipped.has(keyOf(x))), ...q.filter((x) => state.skipped.has(keyOf(x)))];
@@ -1423,7 +1436,8 @@ const SPAN = 2.2;
 
 // The place as the photos show it from above: the real gap with the edges
 // of its neighbours, upright as in the reference. The reference picture
-// while the table picture is being put together.
+// while the table picture is being put together. Returns whether the photo
+// is shown.
 let tableAsked = false;
 function drawGapTile(cv, row, col) {
   const t = state.tableImg;
@@ -1436,26 +1450,65 @@ function drawGapTile(cv, row, col) {
         .then(() => renderSteps())
         .catch(() => {});
     }
-    return;
+    return false;
   }
-  const cx = q.reduce((a, v) => a + v[0], 0) / 4;
-  const cy = q.reduce((a, v) => a + v[1], 0) / 4;
-  const side =
-    (Math.hypot(q[1][0] - q[0][0], q[1][1] - q[0][1]) + Math.hypot(q[3][0] - q[0][0], q[3][1] - q[0][1])) / 2;
-  const half = (side * SPAN) / 2;
+  // The place's corners onto an upright square, as the piece tile lays the
+  // piece: also where an island lies turned on the table.
+  const L = cv.width / SPAN;
+  const place = [
+    [-1, -1],
+    [1, -1],
+    [1, 1],
+    [-1, 1],
+  ].map(([u, v]) => [cv.width / 2 + (u * L) / 2, cv.height / 2 + (v * L) / 2]);
+  const T = similarity(q, place);
   const g = cv.getContext('2d');
   g.fillStyle = '#0b1016';
   g.fillRect(0, 0, cv.width, cv.height);
-  g.drawImage(t.canvas, cx - half, cy - half, 2 * half, 2 * half, 0, 0, cv.width, cv.height);
-  const k = cv.width / (2 * half);
+  // Only the part of the table that lands on the tile.
+  const cx = q.reduce((a, v) => a + v[0], 0) / 4;
+  const cy = q.reduce((a, v) => a + v[1], 0) / 4;
+  const r = (0.75 * cv.width) / Math.hypot(T.a, T.b);
+  const [x0, y0] = [Math.max(0, cx - r), Math.max(0, cy - r)];
+  const [x1, y1] = [Math.min(t.width, cx + r), Math.min(t.height, cy + r)];
+  g.save();
+  g.setTransform(T.a, T.b, -T.b, T.a, T.e, T.f);
+  g.drawImage(t.canvas, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
+  g.restore();
+  const quad = q.map(([x, y]) => [T.a * x - T.b * y + T.e, T.b * x + T.a * y + T.f]);
+  drawMotif(g, quad, row, col);
   g.strokeStyle = '#4fb3ffaa';
   g.lineWidth = 2;
   g.setLineDash([6, 5]);
   g.beginPath();
-  for (const [x, y] of q) g.lineTo((x - cx + half) * k, (y - cy + half) * k);
+  for (const p of quad) g.lineTo(...p);
   g.closePath();
   g.stroke();
   g.setLineDash([]);
+  return true;
+}
+
+// What the reference shows at the place, faint inside the gap: the motif to
+// look for on the table, at the scale and turn of the piece tile. q: the
+// place's corners on the canvas.
+function drawMotif(g, q, row, col) {
+  const { view, W, C } = state.refView;
+  const s = view.width / W;
+  // Affine closest to the four corners (the place is nearly a square here).
+  const ex = [0, 1].map((i) => (q[1][i] - q[0][i] + q[2][i] - q[3][i]) / (2 * C));
+  const ey = [0, 1].map((i) => (q[3][i] - q[0][i] + q[2][i] - q[1][i]) / (2 * C));
+  const m = [0, 1].map((i) => q.reduce((a, v) => a + v[i], 0) / 4);
+  const u0 = (col + 0.5) * C;
+  const v0 = (row + 0.5) * C;
+  g.save();
+  g.beginPath();
+  for (const p of q) g.lineTo(...p);
+  g.closePath();
+  g.clip();
+  g.transform(ex[0], ex[1], ey[0], ey[1], m[0] - ex[0] * u0 - ey[0] * v0, m[1] - ex[1] * u0 - ey[1] * v0);
+  g.globalAlpha = 0.6;
+  g.drawImage(view, col * C * s, row * C * s, C * s, C * s, col * C, row * C, C, C);
+  g.restore();
 }
 
 // Where the piece lies: the photo around it, the piece ringed, so it is
@@ -1491,6 +1544,13 @@ function drawRoute(cv, x, c) {
   const s = state.scenes.find((v) => v.id === x.sceneId);
   const info = state.result.scenes.find((v) => v.id === x.sceneId);
   if (!s || !info || !x.center) return false;
+  // At the table the picture takes the screen's shape; back on the card it
+  // must lose that shape again, or the ring is drawn as an ellipse.
+  if (cv.clientWidth) {
+    const dpr = window.devicePixelRatio || 1;
+    cv.width = Math.round(cv.clientWidth * dpr);
+    cv.height = Math.round(cv.clientHeight * dpr);
+  }
   const t = state.tableImg;
   const m = t?.M.get(x.sceneId);
   const tq = m && cellQuad(t, c.cell);
@@ -1509,11 +1569,6 @@ function drawRoute(cv, x, c) {
   } else {
     drawWhere(cv, x);
     return false;
-  }
-  if (cv.closest('.table')) {
-    const dpr = window.devicePixelRatio || 1;
-    cv.width = Math.round(cv.clientWidth * dpr);
-    cv.height = Math.round(cv.clientHeight * dpr);
   }
   const W = cv.width;
   const H = cv.height;
@@ -1664,37 +1719,29 @@ function renderPieceStep() {
   const cands = candsOf(x);
   const alt = Math.min(state.focus.alt, cands.length - 1);
   const c = cands[alt];
+  const unsure = stepUnsure(c.p);
   const n = q.indexOf(x) + 1;
   $('step-title').textContent = `Teil ${x.label}`;
   $('step-sub').textContent =
-    `${n} von ${q.length}${state.skipped.has(keyOf(x)) ? ' · übersprungen' : ''} · ${Math.round(x.conf * 100)} %`;
+    `${n} von ${q.length}${state.skipped.has(keyOf(x)) ? ' · übersprungen' : ''} · ${pct(x.conf)}`;
   drawPieceTile($('step-a'), x, c.rot, SPAN);
   $('step-a-cap').textContent = `Teil ${x.label}, so gedreht`;
   drawGapTile($('step-b'), c.row, c.col);
-  $('step-b-cap').textContent = `R${c.row + 1} S${c.col + 1} · ${Math.round((c.p ?? 0) * 100)} %`;
+  $('step-b-cap').textContent = `${placeShort(c.row, c.col)} · ${pct(c.p)}`;
   routeCaption(drawRoute($('step-where'), x, c));
-  const box = $('step-cands');
-  box.replaceChildren();
-  cands.forEach((a, i) => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = `cand${i === alt ? ' on' : ''}`;
-    const cv = document.createElement('canvas');
-    cv.width = cv.height = 112;
-    drawGapTile(cv, a.row, a.col);
-    const t = document.createElement('span');
-    t.textContent = `R${a.row + 1} S${a.col + 1} · ${Math.round((a.p ?? 0) * 100)} %`;
-    b.append(cv, t);
-    b.addEventListener('click', () => {
+  renderCands(
+    cands,
+    alt,
+    (cv, a) => drawGapTile(cv, a.row, a.col),
+    (a) => `${placeShort(a.row, a.col)} · ${pct(a.p)}`,
+    (i) => {
       state.focus.alt = i;
-      renderSteps();
-    });
-    box.append(b);
-  });
-  $('step-text').textContent = `Reihe ${c.row + 1}, Spalte ${c.col + 1}. ${turnText(c.turn)}`;
+    },
+  );
+  $('step-text').textContent = `${unsure ? 'Unsicher: ' : ''}${placeLong(c.row, c.col)}. ${turnText(c.turn)}`;
   say(
     `piece:${keyOf(x)}:${c.cell}`,
-    `Teil ${x.label}. ${turnText(c.turn)} Reihe ${c.row + 1}, Spalte ${c.col + 1}.`,
+    `Teil ${x.label}. ${unsure ? 'Unsicher. ' : ''}${turnText(c.turn, true)} ${placeLong(c.row, c.col)}.`,
   );
 }
 
@@ -1702,6 +1749,40 @@ function routeCaption(shown) {
   $('step-where-cap').textContent = shown
     ? 'Gelber Ring: das Teil · blauer Rahmen: sein Platz'
     : 'Hier liegt das Teil';
+}
+
+// An unsure try is still offered, but "Passt" is not the suggested answer.
+function stepUnsure(p) {
+  const unsure = (p ?? 0) < UNSURE;
+  $('step-placed').classList.toggle('primary', !unsure);
+  return unsure;
+}
+
+// The candidates to choose from: those far below the best left out (but
+// the one shown), unsure ones dimmed.
+function renderCands(list, alt, draw, text, pick) {
+  const box = $('step-cands');
+  box.replaceChildren();
+  const best = bestOf(list);
+  list.forEach((a, i) => {
+    if (i !== alt && farBelow(a.p ?? 0, best)) return;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `cand${i === alt ? ' on' : ''}${(a.p ?? 0) < UNSURE ? ' weak' : ''}`;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 112;
+    draw(cv, a);
+    const t = document.createElement('span');
+    t.textContent = text(a, i);
+    b.append(cv, t);
+    b.addEventListener('click', () => {
+      pick(i);
+      renderSteps();
+    });
+    box.append(b);
+  });
+  // One left: it is the place shown above already.
+  box.hidden = box.children.length < 2;
 }
 
 // A gap and the pieces whose outline fits it best: try them one by one.
@@ -1716,38 +1797,30 @@ function renderGapStep() {
   if (!g) return;
   const alt = Math.min(state.gapFocus.alt, g.cands.length - 1);
   const c = g.cands[alt];
+  const unsure = stepUnsure(c.p);
   showScene(c.sceneId);
   const n = q.indexOf(g) + 1;
-  $('step-title').textContent = `Lücke R${g.row + 1} S${g.col + 1}`;
+  $('step-title').textContent = `Lücke ${placeShort(g.row, g.col)}`;
   $('step-sub').textContent =
     `${n} von ${q.length}${state.skippedGaps.has(g.cell) ? ' · übersprungen' : ''} · ${g.sides} fertige Nachbarn`;
-  drawGapTile($('step-a'), g.row, g.col);
-  $('step-a-cap').textContent = 'Lücke';
+  $('step-a-cap').textContent = drawGapTile($('step-a'), g.row, g.col) ? 'Lücke mit Vorlage' : 'Vorlage';
   drawPieceTile($('step-b'), c, c.rot, SPAN);
-  $('step-b-cap').textContent = `Teil ${alt + 1}, so gedreht · ${Math.round(c.p * 100)} %`;
+  $('step-b-cap').textContent = `Teil ${alt + 1}, so gedreht · ${pct(c.p)}`;
   routeCaption(drawRoute($('step-where'), c, c));
-  const box = $('step-cands');
-  box.replaceChildren();
-  g.cands.forEach((a, i) => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = `cand${i === alt ? ' on' : ''}`;
-    const cv = document.createElement('canvas');
-    cv.width = cv.height = 112;
-    drawPieceTile(cv, a, a.rot);
-    const t = document.createElement('span');
-    t.textContent = `Teil ${i + 1} · ${Math.round(a.p * 100)} %`;
-    b.append(cv, t);
-    b.addEventListener('click', () => {
+  renderCands(
+    g.cands,
+    alt,
+    (cv, a) => drawPieceTile(cv, a, a.rot),
+    (a, i) => `Teil ${i + 1} · ${pct(a.p)}`,
+    (i) => {
       state.gapFocus.alt = i;
-      renderSteps();
-    });
-    box.append(b);
-  });
-  $('step-text').textContent = `Teil ${alt + 1} (gelber Ring) hier probieren. ${turnText(c.turn)}`;
+    },
+  );
+  $('step-text').textContent =
+    `${unsure ? 'Unsicher: ' : ''}Teil ${alt + 1} (gelber Ring) hier probieren. ${turnText(c.turn)}`;
   say(
     `gap:${g.cell}:${keyOf(c)}`,
-    `Lücke Reihe ${g.row + 1}, Spalte ${g.col + 1}. Teil im gelben Ring. ${turnText(c.turn)}`,
+    `Lücke ${placeLong(g.row, g.col)}. Teil im gelben Ring${unsure ? ', unsicher' : ''}. ${turnText(c.turn, true)}`,
   );
 }
 
@@ -1838,17 +1911,18 @@ function renderPieceList(q, cur) {
     const no = document.createElement('span');
     no.className = 'no';
     no.textContent = x.label;
-    no.title = `${Math.round(x.conf * 100)} %`;
+    no.title = pct(x.conf);
     no.style.color = COLORS[x.level];
     const pc = document.createElement('canvas');
     pc.width = pc.height = 104;
     drawPieceTile(pc, x, x.rot);
     b.append(no, pc);
-    for (const a of candsOf(x).slice(0, 3)) {
+    const cands = candsOf(x);
+    for (const a of cands.filter((a, i) => !i || !farBelow(a.p ?? 0, bestOf(cands))).slice(0, 3)) {
       const cv = document.createElement('canvas');
       cv.width = cv.height = 104;
       drawCellTile(cv, a.row, a.col);
-      cv.title = `R${a.row + 1} S${a.col + 1} · ${Math.round((a.p ?? 0) * 100)} %`;
+      cv.title = `${placeShort(a.row, a.col)} · ${pct(a.p)}`;
       b.append(cv);
     }
     b.addEventListener('click', () => {
@@ -2184,7 +2258,7 @@ function drawOverlay(g, cur, table = false) {
     (x) => x.sceneId === cur.s.id && (!state.edgeOnly || onEdge(x)) && !(table && x.sameAs),
   );
 
-  if (!state.edgeOnly) drawUnclearAndGroups(g, cur.info, px);
+  if (!state.edgeOnly) drawUnclearAndGroups(g, cur.info, px, !(table && state.edit));
   if (cur.info.board && !table) drawFilled(g, cur.info.board, px);
   for (const x of sugg) {
     const p = cur.info.pieces[x.index];
@@ -2231,7 +2305,10 @@ function drawFocus(g, info, c, px) {
   badge(g, c.center, c, px);
 }
 
-function drawUnclearAndGroups(g, info, px) {
+// arrows: groups with letter, turn and an arrow to their places, framed
+// like a piece's place (a bare arrow into the empty middle of the puzzle
+// does not say what goes there); else only their outlines.
+function drawUnclearAndGroups(g, info, px, arrows = true) {
   for (const u of info.unclear) {
     g.setLineDash([6 * px, 5 * px]);
     poly(g, u.outline);
@@ -2240,12 +2317,32 @@ function drawUnclearAndGroups(g, info, px) {
     g.stroke();
     g.setLineDash([]);
   }
+  const C = state.refView.C;
   for (const gr of info.groups ?? []) {
     poly(g, gr.outline);
     g.strokeStyle = `${COLORS.ok}cc`;
     g.lineWidth = 2 * px;
     g.stroke();
-    if (gr.target) arrow(g, gr.center, gr.target, COLORS.ok, px);
+    if (!arrows) continue;
+    if (gr.target && info.view) {
+      const at = (u, v) => applyH(info.view.H, u * C, v * C);
+      let ex = 0;
+      let ey = 0;
+      for (const cell of gr.cells) {
+        const r = Math.floor(cell / state.cols);
+        const c = cell % state.cols;
+        poly(g, [at(c, r), at(c + 1, r), at(c + 1, r + 1), at(c, r + 1)]);
+        g.fillStyle = `${COLORS.ok}44`;
+        g.fill();
+        g.strokeStyle = COLORS.ok;
+        g.lineWidth = 1.5 * px;
+        g.stroke();
+        const [x, y] = at(c + 0.5, r + 0.5);
+        ex += x / gr.cells.length;
+        ey += y / gr.cells.length;
+      }
+      arrow(g, gr.center, [ex, ey], COLORS.ok, px);
+    }
     badge(g, gr.center, gr, px);
   }
 }
@@ -2343,7 +2440,7 @@ function badge(g, c0, x, px0) {
   const r = 13 * px;
   const color = COLORS[x.level];
   const turn = Math.round(x.turn / 5) * 5;
-  if (Math.abs(turn) >= 10 && x.level !== 'bad') {
+  if (Math.abs(turn) >= STILL && x.level !== 'bad') {
     // Arc around the piece, as large as the piece itself: shows direction
     // and rough angle at a glance.
     const R = Math.max(r + 8 * px, side * 0.42);
@@ -2661,10 +2758,19 @@ function toggleCell(t, v) {
 }
 
 // ---------- Details ----------
-function turnText(t) {
+// In quarter turns, as a hand turns a piece without measuring; "a bit
+// more/less" where it lies between them, degrees beside on screen only.
+// t: degrees, clockwise (to the right) positive.
+function turnText(t, speech = false) {
   const a = Math.round(Math.abs(t) / 5) * 5;
-  if (a < 10) return 'Nicht drehen, liegt schon richtig.';
-  return `Um ${a}° ${t > 0 ? 'im Uhrzeigersinn' : 'gegen den Uhrzeigersinn'} drehen.`;
+  if (a < STILL) return 'Nicht drehen, liegt schon richtig.';
+  const dir = `nach ${t > 0 ? 'rechts' : 'links'}`;
+  const deg = speech ? '' : ` (${a}°)`;
+  if (a < 60) return `Etwas ${dir} drehen${deg}.`;
+  const q = a < 135 ? 90 : 180;
+  const by = a - q >= 20 ? 'Gut eine ' : q - a >= 20 ? 'Knapp eine ' : '';
+  if (q === 90) return `${by || 'Eine '}Vierteldrehung ${dir}${by ? deg : ''}.`;
+  return by ? `${by}halbe Drehung ${dir}${deg}.` : 'Eine halbe Drehung.';
 }
 
 function openDetail(x, info) {
@@ -2700,15 +2806,17 @@ function openDetail(x, info) {
     const k = 260 / (C + 2 * m);
     h.strokeRect(m * k, m * k, C * k, C * k);
     $('detail-text').textContent =
-      `Reihe ${x.row + 1}, Spalte ${x.col + 1} (von links oben). ${turnText(x.turn)} Sicherheit ${Math.round(x.conf * 100)} %.`;
+      `${x.conf < UNSURE ? 'Unsicher: ' : ''}${placeLong(x.row, x.col)}. ${turnText(x.turn)} Sicherheit ${pct(x.conf)}.`;
   } else {
     $('detail-text').textContent = 'Für dieses Teil passt kein freier Platz gut genug.';
   }
   const alts = $('detail-alts');
   alts.replaceChildren();
-  for (const a of x.alts ?? []) {
+  const cands = x.cell === null ? [] : candsOf(x);
+  for (const a of cands.slice(1)) {
+    if (farBelow(a.p ?? 0, bestOf(cands))) continue;
     const s = document.createElement('span');
-    s.textContent = `oder R${a.row + 1}/S${a.col + 1}`;
+    s.textContent = `oder ${placeShort(a.row, a.col)} · ${pct(a.p)}`;
     alts.append(s);
   }
   $('detail').showModal();

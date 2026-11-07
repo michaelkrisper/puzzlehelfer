@@ -110,7 +110,7 @@
               <button type="button" class="btn primary" id="step-placed">Passt</button>
               <button type="button" class="btn" id="step-nofit">Passt nicht</button>
               <button type="button" class="btn" id="step-skip">Überspringen</button>
-              <button type="button" class="btn" id="step-removed">Entfernen</button>
+              <button type="button" class="btn" id="step-removed">Falsch erkannt</button>
               <button type="button" class="btn" id="step-undo" hidden>Rückgängig</button>
             </div>
           </div>
@@ -119,7 +119,8 @@
             Blaue Ecken ziehen: nur dieser Teil des Tisches zählt. Platz antippen: frei (blau) ↔ belegt.
           </p>
           <div class="legend">
-            <span>1, 2, 3 … nach Wahrscheinlichkeit</span><span><i class="sw bad"></i>kein Platz</span>
+            <span>1, 2, 3 … nach Wahrscheinlichkeit</span><span>A, B … zusammengesteckte Gruppe</span>
+            <span><i class="sw bad"></i>kein Platz</span><span>R = Reihe, S = Spalte, von links oben</span>
             <span class="muted">Zwei Finger zoomen, Teil antippen für Details</span>
           </div>
           <div class="row">
@@ -183,8 +184,8 @@
         <p id="detail-text"></p>
         <div id="detail-alts" class="alts"></div>
         <div class="row">
-          <button type="button" class="btn" id="detail-placed">Eingesetzt</button>
-          <button type="button" class="btn" id="detail-removed">Entfernen</button>
+          <button type="button" class="btn" id="detail-placed">Passt</button>
+          <button type="button" class="btn" id="detail-removed">Falsch erkannt</button>
           <button type="submit" class="btn primary" value="close">Schließen</button>
         </div>
       </form>

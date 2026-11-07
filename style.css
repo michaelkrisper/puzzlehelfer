@@ -503,6 +503,11 @@ details.more summary {
   border-color: var(--accent);
 }
 
+/* Unsure: still there to try, but not inviting. */
+.cand.weak:not(.on) {
+  opacity: 0.55;
+}
+
 .step-text {
   margin: 0.5rem 0;
 }

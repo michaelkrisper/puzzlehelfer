@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Step cards: the gap shows the reference faintly inside its frame, so the
+  motif to look for is right there (also in "Nach Teil" and "Am Tisch").
+  Turns are said in quarter turns ("Vierteldrehung nach rechts", "halbe
+  Drehung"), below 20 degrees "Nicht drehen". Weak candidates are marked
+  "Unsicher" and dimmed, hopeless ones (0 %, a tenth of the best) hidden.
+  One place notation everywhere (R2 S7, spoken "Reihe 2, Spalte 7"); the
+  detail dialog says "Passt" like the card, "Entfernen" is now "Falsch
+  erkannt". Group arrows end at their framed places.
 - Fewer right places thrown away: a knob or hole that seems not to fit its
   gap rules a place out only when the piece's side is clearly read, and not
   where feature points or the step-by-step order put the piece there; an
