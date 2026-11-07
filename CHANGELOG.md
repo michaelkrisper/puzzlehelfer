@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.45.1 – 2026-11-07
 
 - Semantic versions, shown in the header: every successful merge on main
   raises the patch version (0.45.1, 0.45.2, …); CI sets it, tags the release
