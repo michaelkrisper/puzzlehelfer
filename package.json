@@ -1,6 +1,6 @@
 {
   "name": "puzzlehelfer",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "description": "Photograph jigsaw pieces and learn where they go and how to rotate them – as an installable web app right in the browser",
   "homepage": "https://michaelkrisper.github.io/puzzlehelfer/",
   "repository": {

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.5 – 2026-11-07
 
 - Percentages closer to the truth: by gap they were too low (Kanagawa: 50 %
   on average, 19 of 21 right), now p^0.6; by piece never "100 %" any more
