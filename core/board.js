@@ -586,7 +586,8 @@
   // table lies to the right: a gap is then traversed clockwise, just like the
   // piece that belongs in it.
   // tol: how far (share of a side) a corner of the grid may lie off the
-  // outline.
+  // outline without further checks.
+  const FAR_CORNER = 0.45;
   function boardOutlines(cv, bigMask, board, C, tol = 0.2) {
     const contours = new cv.MatVector();
     const hier = new cv.Mat();
@@ -651,8 +652,8 @@
         const a = cs[d];
         const b = cs[(d + 1) % 4];
         const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
-        const na = nearest(a, tol * L);
-        const nb = nearest(b, tol * L);
+        const na = nearest(a, Math.max(tol, FAR_CORNER) * L);
+        const nb = nearest(b, Math.max(tol, FAR_CORNER) * L);
         if (!na || !nb || na.li !== nb.li) return null;
         const pts = lines[na.li];
         const n = pts.length;
@@ -660,6 +661,16 @@
         const ib = turnNear(pts, nb.i, L);
         const len = (ib - ia + n) % n;
         if (len < 0.5 * L || len > 3 * L) return null;
+        // A corner further off (along the frame the grid misses the seams by
+        // up to a third of a place): only if the rim still runs from corner
+        // to corner, about one side apart and along the side.
+        if (na.d > tol * L || nb.d > tol * L) {
+          const u = [pts[ib][0] - pts[ia][0], pts[ib][1] - pts[ia][1]];
+          const chord = Math.hypot(...u);
+          const cos = (u[0] * (b[0] - a[0]) + u[1] * (b[1] - a[1])) / (chord * L + 1e-9);
+          if (len > 2.5 * L || chord < 0.5 * L || chord > 1.5 * L || cos < Math.cos((35 * Math.PI) / 180))
+            return null;
+        }
         const step = Math.max(1, Math.round(0.5 * board.k));
         const out = [];
         for (let j = 0; j <= len; j += step) {
@@ -746,7 +757,7 @@
   // An island (or a joined group) on its own mapping: the main one after
   // its move S. Places and gaps are sampled in the photo along that mapping,
   // so no warp of the whole photo is needed per island.
-  function measureIsland(cv, ref, hit, move, blob, bigMask, sceneGray) {
+  function measureIsland(cv, ref, hit, move, blob, bigMask) {
     const { C, cols, rows } = ref;
     const w = bigMask.cols;
     const h = bigMask.rows;
@@ -783,8 +794,9 @@
       r1 = Math.max(r1, Math.ceil(v / C));
     }
     const range = [Math.max(0, r0 - 1), Math.min(rows, r1 + 1), Math.max(0, c0 - 1), Math.min(cols, c1 + 1)];
-    // Its grid onto its seams and outline, as the main part's.
-    view.field = seamField(cv, view, ref, sceneGray, m, range);
+    // Its grid follows its move alone: the few seams of an island pulled
+    // single corners by up to half a place and sheared the places at its
+    // border (Cats islands: more places found, right first 78 → 83 of 166).
     const isFilled = new Uint8Array(cols * rows);
     const filled = [];
     for (let r = range[0]; r < range[1]; r++)
@@ -892,6 +904,8 @@
     return out;
   }
 
+  const LOOK_DC = 10; // Lab a/b units; dark pieces read as table: at most 6.3 (Kanagawa)
+
   // sf: feature points of the photo (PH.feature.sceneFeatures), or null.
   // big: the large areas of the photo (PH.segment.segmentScene big).
   // k: expected photo pixels per reference pixel, or null.
@@ -971,12 +985,53 @@
           looks.push(r * cols + c);
       }
     }
+    // Colour fit photo → reference over blocks of occupied places.
+    const bs = C / G;
+    const sb = PH.reference.blockMeans(lab, ref.W, ref.H, bs);
+    const colorOver = (taken) => {
+      const pairs = [];
+      for (let by = 0; by < sb.h; by++) {
+        for (let bx = 0; bx < sb.w; bx++) {
+          if (!taken(Math.floor(by / G) * cols + Math.floor(bx / G))) continue;
+          if (fraction(mask, W, bx * bs, by * bs, (bx + 1) * bs, (by + 1) * bs, true) < 0.95) continue;
+          const o = (by * sb.w + bx) * 3;
+          pairs.push([
+            Array.from(sb.data.subarray(o, o + 3)),
+            Array.from(ref.blocks.data.subarray(o, o + 3)),
+          ]);
+        }
+      }
+      return fitColor(pairs);
+    };
+    // The print must match in colour too: wood grain matches the grey print
+    // of some places by chance (Cats: 0.6–0.7 next to the frame) but stays
+    // brown. Chroma off by more than LOOK_DC after the colour fit over the
+    // places the mask shows.
+    const col = colorOver((cell) => isFilled[cell]);
+    const tinted = (cell) => {
+      if (!col) return false;
+      const r = Math.floor(cell / cols);
+      const c = cell % cols;
+      let da = 0;
+      let db = 0;
+      let n = 0;
+      for (let y = Math.round((r + 0.3) * C); y < (r + 0.7) * C; y += 2) {
+        for (let x = Math.round((c + 0.3) * C); x < (c + 0.7) * C; x += 2) {
+          const o = (y * W + x) * 3;
+          da += lab[o + 1] * col[1][0] + col[1][1] - ref.lab[o + 1];
+          db += lab[o + 2] * col[2][0] + col[2][1] - ref.lab[o + 2];
+          n++;
+        }
+      }
+      return Math.hypot(da, db) / n > LOOK_DC;
+    };
     // By the print alone only within the finished part (two filled sides,
     // growing inward): on a wooden table loose pieces match some place by
     // chance.
+    const alike = looks.filter((cell) => !tinted(cell));
     for (let grown = true; grown; ) {
       grown = false;
-      for (const cell of looks) {
+      for (const cell of alike) {
         if (isFilled[cell]) continue;
         const r = Math.floor(cell / cols);
         const c = cell % cols;
@@ -1038,7 +1093,7 @@
     const islands = [];
     const owner = new Map();
     for (const mv of moves) {
-      const it = measureIsland(cv, ref, hit, mv, blobs[mv.blob], bigMask, sceneGray);
+      const it = measureIsland(cv, ref, hit, mv, blobs[mv.blob], bigMask);
       if (!it) continue;
       // A single piece counts only near its place: else it is a loose piece
       // whose points happen to agree.
@@ -1108,20 +1163,6 @@
       one.delete();
     }
 
-    // Colour fit over the occupied places.
-
-    const bs = C / G;
-    const sb = PH.reference.blockMeans(lab, ref.W, ref.H, bs);
-    const pairs = [];
-    for (let by = 0; by < sb.h; by++) {
-      for (let bx = 0; bx < sb.w; bx++) {
-        const cell = Math.floor(by / G) * cols + Math.floor(bx / G);
-        if (!isFilled[cell] || owner.has(cell)) continue;
-        if (fraction(mask, W, bx * bs, by * bs, (bx + 1) * bs, (by + 1) * bs, true) < 0.95) continue;
-        const o = (by * sb.w + bx) * 3;
-        pairs.push([Array.from(sb.data.subarray(o, o + 3)), Array.from(ref.blocks.data.subarray(o, o + 3))]);
-      }
-    }
     return {
       H,
       Hi: hit.Hi,
@@ -1133,7 +1174,8 @@
       unseen: unseen.filter((c) => !isFilled[c]),
       holes,
       gaps: [...gaps],
-      color: fitColor(pairs),
+      // Colour fit over the occupied places.
+      color: colorOver((cell) => isFilled[cell] && !owner.has(cell)),
       islands,
       islandBig: [...islandBig],
       owner: [...owner],
@@ -1177,19 +1219,10 @@
   // place, that puts the most of them onto the three nearest grid lines.
   // Median over the neighbouring corners; corners without lines around
   // (inside large gaps) take the mean of their neighbours.
-  // range: grid corners [r0, r1] × [c0, c1] to measure (an island), else
-  // all.
-  function seamField(cv, board, ref, sceneGray, bigMask, range = null) {
+  function seamField(cv, board, ref, sceneGray, bigMask) {
     const F = 2;
     const { C, cols, rows } = ref;
-    const [r0, r1, c0, c1] = range ?? [0, rows, 0, cols];
-    const rect = [
-      Math.max(0, (c0 - 1.6) * C),
-      Math.max(0, (r0 - 1.6) * C),
-      Math.min(ref.W, (c1 + 1.6) * C),
-      Math.min(ref.H, (r1 + 1.6) * C),
-    ];
-    const { d, m, W, H, ox, oy } = seamImage(cv, board, ref, sceneGray, bigMask, F, rect);
+    const { d, m, W, H } = seamImage(cv, board, ref, sceneGray, bigMask, F);
     const E = new Float32Array(W * H);
     for (let y = 1; y < H - 1; y++) {
       for (let x = 1; x < W - 1; x++) {
@@ -1210,12 +1243,12 @@
     const sx = new Float64Array(2 * R + 1);
     const sy = new Float64Array(2 * R + 1);
     let found = 0;
-    for (let j = r0; j <= r1; j++) {
-      for (let i = c0; i <= c1; i++) {
+    for (let j = 0; j <= rows; j++) {
+      for (let i = 0; i <= cols; i++) {
         sx.fill(0);
         sy.fill(0);
-        const x0 = i * L - ox;
-        const y0 = j * L - oy;
+        const x0 = i * L;
+        const y0 = j * L;
         for (let o = -R; o <= R; o++) {
           for (let k = -1; k <= 1; k++) {
             const x = x0 + k * L + o;
@@ -1238,7 +1271,7 @@
         });
       }
     }
-    if (found < 0.1 * (r1 - r0 + 1) * (c1 - c0 + 1)) return null;
+    if (found < 0.1 * N) return null;
     const [dx, dy] = raw.map((A) => {
       let B = new Float32Array(N).fill(Number.NaN);
       for (let j = 0; j <= rows; j++) {

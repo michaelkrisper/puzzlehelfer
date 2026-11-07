@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Gap edges found at more places next to the frame and islands (a grid
+  corner may lie up to 0.45 of a side off when the rim still runs corner to
+  corner), wood grain no longer taken for a dark piece by its print pattern
+  alone, and islands no longer bent by their own seam field. On the Cats
+  test photos 83 of 166 pieces get the right first suggestion instead of 67,
+  places without a rim 33 -> 14, false filled places 48 -> 40. Kanagawa
+  unchanged.
+
 ## 0.5.3 – 2026-11-07
 
 - The round survives a reload or a closed tab: photos, Passt / Passt nicht,
