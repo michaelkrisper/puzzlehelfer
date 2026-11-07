@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.2 – 2026-11-07
 
 - Versions start at 0.5 (the first two releases, 0.45.0 and 0.45.1, are
   0.5.0 and 0.5.1 now).
