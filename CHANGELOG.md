@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.3 – 2026-11-07
 
 - The round survives a reload or a closed tab: photos, Passt / Passt nicht,
   skipped pieces and the crop come back and the photos are analysed again.
