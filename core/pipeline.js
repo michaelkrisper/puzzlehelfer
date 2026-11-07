@@ -1280,6 +1280,11 @@
   // all gaps, Sinkhorn). p: chance among the pieces that may go there.
   // Clearest gaps first.
   const GAP_T = 2; // evidence halved: the same piece on two photos often prefers another place
+  // The shares shown were too low: Kanagawa's 21 gaps at 50 % on average,
+  // 19 right; Cats' 20 at 13 %, 5 right. p^0.6 (at most 98 % together) lowers
+  // the Brier score there from 0.266 to 0.207 and 0.193 to 0.182; top-1 and
+  // the first five gaps stay the same.
+  const GAP_SHOW = 0.6;
   function gapCandidates(items, rims, scenes, ref, free, moves) {
     const cells = [...rims.keys()].filter((c) => free[c]);
     const best = cells.map((cell) =>
@@ -1328,7 +1333,11 @@
       });
       if (!ranked.length) return;
       ranked.sort((a, b) => b.p - a.p);
-      const cands = ranked.slice(0, 3).map((x) => ({
+      const top = ranked.slice(0, 3);
+      for (const x of top) x.p **= GAP_SHOW;
+      const sum = top.reduce((s, x) => s + x.p, 0);
+      if (sum > 0.98) for (const x of top) x.p *= 0.98 / sum;
+      const cands = top.map((x) => ({
         scene: x.it.scene,
         index: x.it.index,
         center: x.it.shape.center,

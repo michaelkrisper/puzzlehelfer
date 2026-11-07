@@ -1768,7 +1768,9 @@ const keyOf = (x) => `${x.sceneId}:${x.index}`;
 // A place: short on tiles and chips, spelled out in sentences and speech.
 const placeShort = (row, col) => `R${row + 1} S${col + 1}`;
 const placeLong = (row, col) => `Reihe ${row + 1}, Spalte ${col + 1}`;
-const pct = (p) => `${Math.round((p ?? 0) * 100)} %`;
+// Never "100 %": of the suggestions at 95 % or more, 5 of 63 were wrong
+// (Cats, 8 photos).
+const pct = (p) => `${Math.round(Math.min(0.95, p ?? 0) * 100)} %`;
 
 // Below this a try is marked unsure: still offered, not recommended.
 const UNSURE = 0.1;

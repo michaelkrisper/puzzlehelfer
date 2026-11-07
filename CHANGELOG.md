@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Percentages closer to the truth: by gap they were too low (Kanagawa: 50 %
+  on average, 19 of 21 right), now p^0.6; by piece never "100 %" any more
+  (5 of 63 shown at 95 % or more were wrong), at most 95 %.
+
 ## 0.5.4 – 2026-11-07
 
 - Gap edges found at more places next to the frame and islands (a grid
