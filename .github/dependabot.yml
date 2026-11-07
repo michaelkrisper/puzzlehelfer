@@ -7,7 +7,7 @@ updates:
     # Majors included: separate PRs on the same workflow file block each other's auto-merge.
     groups:
       actions:
-        patterns: ['*']
+        patterns: ["*"]
   - package-ecosystem: npm
     directory: /
     schedule:
