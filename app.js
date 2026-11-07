@@ -5,7 +5,7 @@ const REF_MAX = 2400;
 const SCENE_MAX = 4000;
 const COUNTS = [100, 200, 300, 500, 1000, 1500, 2000];
 // Same as VERSION in sw.js; CI raises both on every merge on main.
-const APP_VERSION = 'v0.45.1';
+const APP_VERSION = 'v0.5.1';
 const ARROWS = 6;
 const $ = (id) => document.getElementById(id);
 

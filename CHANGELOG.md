@@ -1,12 +1,17 @@
 # Changelog
 
-## 0.45.1 – 2026-11-07
+## Unreleased
+
+- Versions start at 0.5 (the first two releases, 0.45.0 and 0.45.1, are
+  0.5.0 and 0.5.1 now).
+
+## 0.5.1 – 2026-11-07
 
 - Semantic versions, shown in the header: every successful merge on main
-  raises the patch version (0.45.1, 0.45.2, …); CI sets it, tags the release
+  raises the patch version (0.5.1, 0.5.2, …); CI sets it, tags the release
   and turns this heading into the version.
 
-## 0.45.0 – 2026-11-07
+## 0.5.0 – 2026-11-07
 
 Was v45; before, plain counters v1 … v45.
 
