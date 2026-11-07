@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fewer right places thrown away: a knob or hole that seems not to fit its
+  gap rules a place out only when the piece's side is clearly read, and not
+  where feature points or the step-by-step order put the piece there; an
+  unclear flat reading at an inner place costs less; many matching feature
+  points count more (beyond 10, about 4 points per doubling). On the Cats
+  test photos 67 of 159 pieces get the right first suggestion instead of 35;
+  of those shown at 95 % or more, 50 of 51 are right. Kanagawa unchanged.
 - Grid from the finished part: its seams now also correct the number of
   columns and rows, not only their position (240 pieces: 12 × 20 instead of
   14 × 17, before stuck at the guess for square pieces). The reference tab

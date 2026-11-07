@@ -153,15 +153,23 @@
     return prep.allowRot && !prep.allowRot[k] ? 0.5 : 0;
   }
 
+  // A side read flat at an inner place counts as much as it is surely flat:
+  // fully below 0.05 of a side, less up to the knob threshold 0.1 (a shallow
+  // knob, or a corner put at the knob). Cats, 8 photos, all pieces inner:
+  // 55 of 636 sides read flat, 31 of them deeper than 0.06.
   function borderPenalty(sides, r, c, k, ref) {
     const bd = borderDirs(r, c, ref);
     let pen = 0;
     for (let d = 0; d < 4; d++) {
-      const flat = sideAt(sides, d, k).type === 0;
-      if (flat !== bd[d]) pen++;
+      const s = sideAt(sides, d, k);
+      if (s.type === 0 && !bd[d]) pen += Math.max(0.2, Math.min(1, (0.1 - s.depth) / 0.05));
+      else if ((s.type === 0) !== bd[d]) pen++;
     }
     return pen;
   }
+  // More than one side clearly against the border rules a place out; with
+  // clearly measured sides one already.
+  const penOk = (prep, bp) => bp <= (prep.strictBorder ? 0 : 1.5);
 
   // Residual after the best linear fit per channel (q ≈ a·p + b).
   // Reflections, colour cast and exposure of the box photo shift colours
@@ -211,7 +219,7 @@
         for (let c = 0; c < cols; c++) {
           if (free && !free[r * cols + c]) continue;
           const bp = borderPenalty(sides, r, c, k, ref);
-          if (bp > (prep.strictBorder ? 0 : 1)) continue;
+          if (!penOk(prep, bp)) continue;
           if (fits && !fits(r * cols + c, k)) continue;
           const pen = bp + rp;
           let best = Infinity;
@@ -337,7 +345,7 @@
       const r = Math.floor(m.cell / ref.cols);
       const c = m.cell % ref.cols;
       const bp = borderPenalty(sides, r, c, m.rot, ref);
-      if (bp <= (prep.strictBorder ? 0 : 1))
+      if (penOk(prep, bp))
         coarse.push({ cell: m.cell, rot: m.rot, coarse: Infinity, pen: bp + rotPenalty(prep, m.rot) });
     }
     const fine = coarse.map((c) => fineScore(prep, ref, c));
@@ -347,13 +355,47 @@
 
   // Feature points that RANSAC maps onto the same place: random pairs hardly
   // ever agree, from about six the place is as good as certain. Measured on
-  // artificial photos with a known solution.
+  // artificial photos with a known solution. Beyond ten points more still
+  // count, 4 per doubling: capped at 10, an image score 3.5 times worse
+  // outweighed any number, yet on real photos (Cats, 8 photos) 60 of 69
+  // pieces with 15 or more points were at that place, the rest next to it.
   function featBonus(inliers) {
-    return Math.max(0, Math.min(FEAT_MAX, (inliers - FEAT_MIN) * FEAT_STEP));
+    return (
+      Math.max(0, Math.min(FEAT_MAX, (inliers - FEAT_MIN) * FEAT_STEP)) +
+      FEAT_LOG * Math.log(Math.max(1, inliers / 10))
+    );
   }
   const FEAT_MIN = 3;
   const FEAT_STEP = 1.5;
   const FEAT_MAX = 10;
+  const FEAT_LOG = 6;
+
+  // How clearly a side reads as knob or hole, 0 … 1: a wavy side that goes
+  // out about as far as in is read either way. Kanagawa (2 real photos, 61
+  // sides of pieces at their right place): all 57 with one way at least
+  // 2.5 times the other agreed with the gap side, 2 of the other 4 not.
+  function clarity(s) {
+    if (s.type === 0) return 0;
+    let out = 0;
+    let inn = 0;
+    for (let k = 1; k < s.profile.length; k += 2) {
+      out = Math.max(out, s.profile[k]);
+      inn = Math.max(inn, -s.profile[k]);
+    }
+    return Math.max(0, Math.min(1, (0.7 - Math.min(out, inn) / Math.max(out, inn)) / 0.3));
+  }
+
+  // Knob or hole of a piece against a gap side of the finished part where
+  // its outline is laid into the rim anyway: the fit judges the shape, the
+  // reading adds only as much as both readings are clear. A side read flat
+  // is already charged by the border penalty. Cats (8 photos, places and
+  // turns confirmed by feature points): gap sides from the area test agreed
+  // with the right piece in 15 of 34, from the neighbour's outline in 27 of
+  // 38, all 9 with a knob or hole deeper than 0.3.
+  function rimMisfit(mine, ct) {
+    const gap = ct.hole ? Math.max(0, Math.min(1, (ct.hole.depth - 0.1) / 0.2)) : 0.25;
+    return 4 * gap * clarity(mine);
+  }
 
   // Stepwise assignment: always the surest piece first, then its sides act as
   // constraints for the neighbouring places.
@@ -396,7 +438,7 @@
           const ct = constraint.get(`${cd.cell},${d}`);
           if (!ct) continue;
           const mine = sideAt(p.sides, d, cd.rot);
-          if (mine.type !== ct.need) topo -= 4;
+          if (mine.type !== ct.need) topo -= rim && !ct.side ? rimMisfit(mine, ct) : 4;
           else if (rim && !ct.side) continue;
           else if (ct.hole) {
             const hd = PH.piece.holeDistance(mine, ct.hole);
@@ -572,6 +614,7 @@
     rotate,
     sideAt,
     borderPenalty,
+    clarity,
     DIRS,
     patchBlocks,
   };

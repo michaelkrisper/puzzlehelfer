@@ -1228,12 +1228,21 @@
           sameAs: twin ? { scene: twin.scene, index: twin.index } : null,
         };
         if (!ev) return { ...base, cell: null };
+        const featOk = !!(it.feat?.inliers && it.feat.cell === ev.top.cell);
         // At the edge of a finished part: knobs and holes must fit every
-        // neighbouring gap side, else the piece has no place there.
+        // neighbouring gap side, else the piece has no place there. Only a
+        // side clearly read as knob or hole counts (PH.match.clarity), and
+        // not where the place holds without it: feature points on it, or
+        // taken in the stepwise assignment despite the misfit. Sides read the
+        // wrong way are common: dropped on any misfit, 22 of 48 pieces were at
+        // their right place (Cats, 8 photos), 2 of 3 on Kanagawa; dropped so,
+        // none of 25 (Cats) and 1 (Kanagawa).
         let fit = null;
+        let misfit = false;
         if (atEdge) {
           fit = gapFit(it.sides, ev.top, gaps);
-          if (fit.bad || (!fit.n && gaps.size)) return { ...base, cell: null };
+          misfit = fit.bad > 0 || (!fit.n && gaps.size > 0);
+          if ((fit.clear || (!fit.n && gaps.size)) && !ev.step && !featOk) return { ...base, cell: null };
         }
         // Shown as sure (green) only with independent support: feature points
         // on the same place, or an image comparison without any rival; and a
@@ -1242,8 +1251,8 @@
         // distance is set for finished parts of 40+ places; at smaller ones
         // it rejected only right suggestions (synthetic, 4 seeds: all sure
         // ones right up to 0.17), so there the knob/hole fit above is enough.
-        const featOk = !!(it.feat?.inliers && it.feat.cell === ev.top.cell);
         const sure =
+          !misfit &&
           !!ev.step &&
           ev.conf >= 0.6 &&
           (featOk || ev.conf >= 0.99) &&
@@ -1333,20 +1342,24 @@
   }
 
   // How a piece at cand (cell, rot) fits the gap sides of the finished part:
-  // number of gap sides, knob/hole mismatches, worst outline distance.
+  // number of gap sides, knob/hole mismatches (clear: the piece's side
+  // clearly a knob or hole), worst outline distance.
   function gapFit(sides, cand, gaps) {
     let n = 0;
     let bad = 0;
+    let clear = 0;
     let worst = 0;
     for (let d = 0; d < 4; d++) {
       const g = gaps.get(`${cand.cell},${d}`);
       if (!g) continue;
       n++;
       const mine = PH.match.sideAt(sides, d, cand.rot);
-      if (mine.type !== g.need) bad++;
-      else if (g.hole) worst = Math.max(worst, PH.piece.holeDistance(mine, g.hole));
+      if (mine.type !== g.need) {
+        bad++;
+        if (PH.match.clarity(mine) === 1) clear++;
+      } else if (g.hole) worst = Math.max(worst, PH.piece.holeDistance(mine, g.hole));
     }
-    return { n, bad, worst };
+    return { n, bad, clear, worst };
   }
 
   // Places of islands (core/board.js) over all photos: place → the island
