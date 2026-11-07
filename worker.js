@@ -118,7 +118,44 @@ function shrink(image, max) {
 const viewMax = (image, s) =>
   Math.round(Math.min(2400, Math.max(1200, 0.75 * s.scale * Math.max(image.width, image.height))));
 
-const progressFor = (id) => (text) => postMessage({ type: 'progress', id, text });
+// Steps of one photo (analyzeScene, then laying it onto the others here) and
+// where each starts as part of the time the photo takes (Cats photos,
+// desktop); steps without a finished part or feature points are skipped.
+// at, to: part done at this message and at the next, for the progress bars.
+const PLACING = 'Foto wird eingeordnet …';
+const SCENE_STEPS = new Map([
+  ['Teilgröße wird gemessen …', 0],
+  ['Teile werden vom Tisch getrennt …', 0.07],
+  ['Merkmalspunkte werden gesucht …', 0.22],
+  ['Fertiger Teil wird auf die Vorlage gelegt …', 0.52],
+  ['Teile werden vermessen …', 0.71],
+  ['Merkmalspunkte werden verglichen …', 0.76],
+  [PLACING, 0.95],
+]);
+function sceneStep(text) {
+  const at = SCENE_STEPS.get(text);
+  if (at === undefined) return {};
+  return { at, to: [...SCENE_STEPS.values()].find((v) => v > at) ?? 1 };
+}
+// The search for places compares piece by piece, a second time after the
+// colours were fitted again.
+function solveStep(text) {
+  const m = / (\d+) von (\d+)/.exec(text);
+  if (!m) return text.startsWith('Umrisse') ? { at: 0.02, to: 0.1 } : {};
+  const [a, b] = text.startsWith('Feinabgleich') ? [0.6, 0.95] : [0.1, 0.6];
+  const n = Number(m[1]);
+  const N = Number(m[2]);
+  return { at: a + ((b - a) * (n - 1)) / N, to: a + ((b - a) * Math.min(N, n + 9)) / N };
+}
+const progressFor = (id, step) => (text) => postMessage({ type: 'progress', id, text, ...step(text) });
+
+// Where the pieces are, as parts of the photo's width and height: marks of
+// the user follow their piece when a photo is analysed again.
+const centers = (s) =>
+  s.pieces.map(({ outline: o }) => [
+    o.reduce((a, p) => a + p[0], 0) / o.length / s.width,
+    o.reduce((a, p) => a + p[1], 0) / o.length / s.height,
+  ]);
 
 // The reference corners and grid that the seams of a finished part show
 // (PH.geom.gridFromSeams), mapped back onto the reference photo.
@@ -177,7 +214,9 @@ const handlers = {
   },
   scene({ id, sceneId, image, next = [] }) {
     if (!ref) throw new Error('Keine Vorlage');
-    const s = PH.pipeline.analyzeScene(cv, image, ref, progressFor(id), { scale: scaleHint(image), table });
+    const progress = progressFor(id, sceneStep);
+    const s = PH.pipeline.analyzeScene(cv, image, ref, progress, { scale: scaleHint(image), table });
+    progress(PLACING);
     if (s.table) table = s.table;
     scenes.set(sceneId, s);
     previews.set(sceneId, shrink(image, viewMax(image, s)));
@@ -194,6 +233,7 @@ const handlers = {
       aspect: ref.hi.w / ref.hi.h,
       seams: seamQuad(s.board?.seams),
       viewMax: viewMax(image, s),
+      centers: centers(s),
     };
   },
   // All photos with the puzzle as one picture from above.
@@ -225,7 +265,7 @@ const handlers = {
     const local = (arr) =>
       arr.map((p) => ({ ...p, scene: ids.indexOf(p.sceneId) })).filter((p) => p.scene >= 0);
     const sugg = PH.pipeline.solve(ref, list, {
-      progress: progressFor(id),
+      progress: progressFor(id, solveStep),
       placed: local(placed),
       removed: local(removed),
       nofit: local(nofit),

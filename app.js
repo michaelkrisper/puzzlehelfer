@@ -10,36 +10,68 @@ const ARROWS = 6;
 const $ = (id) => document.getElementById(id);
 
 // ---------- Worker ----------
-const worker = new Worker('worker.js');
+let worker = null;
 const pending = new Map();
 let nextId = 1;
-worker.onmessage = (e) => {
-  const m = e.data;
-  if (m.type === 'ready') {
-    $('engine').textContent = 'bereit';
-    $('engine').classList.add('ready');
-    return;
-  }
-  const p = pending.get(m.id);
-  if (!p) return;
-  if (m.type === 'progress') {
-    setStatus(m.text);
-    return;
-  }
-  pending.delete(m.id);
-  if (m.type === 'error') p.reject(new Error(m.message));
-  else p.resolve(m.data);
-};
-worker.onerror = (e) => {
-  $('engine').textContent = `Fehler: ${e.message ?? 'Bilderkennung lädt nicht'}`;
-};
+function startWorker() {
+  worker = new Worker('worker.js');
+  worker.onmessage = (e) => {
+    const m = e.data;
+    if (m.type === 'ready') {
+      $('engine').textContent = 'bereit';
+      $('engine').classList.add('ready');
+      return;
+    }
+    const p = pending.get(m.id);
+    if (!p) return;
+    if (m.type === 'progress') {
+      if (p.progress) p.progress(m);
+      else setStatus(m.text);
+      return;
+    }
+    pending.delete(m.id);
+    if (m.type === 'error') p.reject(new Error(m.message));
+    else p.resolve(m.data);
+  };
+  worker.onerror = (e) => {
+    $('engine').textContent = `Fehler: ${e.message ?? 'Bilderkennung lädt nicht'}`;
+  };
+}
+startWorker();
 // transfer: buffers handed over without a copy (gone here afterwards).
-function call(type, payload = {}, transfer = []) {
+// progress: called with the worker's progress messages instead of the status.
+function call(type, payload = {}, transfer = [], progress = null) {
   const id = nextId++;
   return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
+    pending.set(id, { resolve, reject, progress, type });
     worker.postMessage({ id, type, ...payload }, transfer);
   });
+}
+
+// A photo cannot be stopped inside the worker: a new worker gets the
+// reference again (stored feature points make that quick) but loses every
+// photo analysed, so this is only for when there is none, and only while
+// the calls waiting can go: photos (stopped), removing photos (none left)
+// and the reference for an earlier new worker (sent again).
+const STOPPED = 'Abgebrochen';
+const STOPPING = 'Wird abgebrochen, sobald das Foto fertig gerechnet ist …';
+let resendId = 0;
+const droppable = ([id, p]) =>
+  p.type === 'scene' || p.type === 'removeScene' || p.type === 'clearScenes' || id === resendId;
+function restartWorker() {
+  worker.terminate();
+  for (const p of pending.values()) {
+    if (p.type === 'scene' || p.type === 'reference') p.reject(new Error(STOPPED));
+    else p.resolve({});
+  }
+  pending.clear();
+  $('engine').textContent = 'Bilderkennung lädt …';
+  $('engine').classList.remove('ready');
+  startWorker();
+  // Messages wait in order until OpenCV is loaded.
+  if (!state.refView) return;
+  resendId = nextId;
+  sendReference().catch((err) => err.message !== STOPPED && console.warn(err));
 }
 
 // ---------- Storage (IndexedDB) ----------
@@ -66,6 +98,149 @@ async function load(key) {
     r.onsuccess = () => resolve(r.result);
     r.onerror = () => reject(r.error);
   });
+}
+// The photos of the round, stored once each as the original file ('photo:'
+// up to the next character, ';').
+const PHOTOS = IDBKeyRange.bound('photo:', 'photo;', false, true);
+async function photoKeys() {
+  const d = await db;
+  return new Promise((resolve, reject) => {
+    const r = d.transaction('kv').objectStore('kv').getAllKeys(PHOTOS);
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  });
+}
+
+// ---------- Round (survives a reload) ----------
+// Android may end the tab while the camera app is open: photos and marks
+// are kept, and on start the photos are analysed again (the analyses live in
+// the worker and are too big to store). Marks name pieces by their number in
+// a photo, which a new analysis may change, so their position goes along.
+const pieceAt = new Map(); // `${sceneId}:${index}` → position from a stored round
+
+function positionOf(sceneId, index) {
+  const info = state.result?.scenes.find((x) => x.id === sceneId);
+  const o = info?.pieces[index]?.outline;
+  if (!o) return pieceAt.get(`${sceneId}:${index}`) ?? null;
+  return [
+    o.reduce((a, p) => a + p[0], 0) / o.length / info.width,
+    o.reduce((a, p) => a + p[1], 0) / o.length / info.height,
+  ];
+}
+const withAt = (x) =>
+  x && x.sceneId !== undefined ? { ...x, at: positionOf(x.sceneId, x.index) ?? x.at ?? null } : x;
+const splitKey = (k) => k.split(':').map(Number);
+
+function saveRound() {
+  if (!state.refBlob) return;
+  store('round', {
+    grid: [state.cols, state.rows],
+    scenes: state.scenes.map((s) => ({ id: s.id, name: s.name, next: s.next })),
+    marks: state.marks.map(withAt),
+    skipped: [...state.skipped].map((k) => {
+      const [sceneId, index] = splitKey(k);
+      return withAt({ sceneId, index });
+    }),
+    skippedGaps: [...state.skippedGaps],
+    focus: withAt(state.focus),
+    gapFocus: state.gapFocus,
+    gapMode: state.gapMode,
+    gapModeChosen: state.gapModeChosen,
+    table: state.table,
+    tableChosen: state.tableChosen,
+    crop: state.crop,
+    current: state.current,
+  }).catch((err) => console.warn(err));
+}
+async function clearRound() {
+  await store('round', undefined);
+  const d = await db;
+  d.transaction('kv', 'readwrite').objectStore('kv').delete(PHOTOS);
+}
+// After every tap on the results (skip, choices, marks: after the handlers),
+// and when switching to the camera app, where the tab may end.
+$('result').addEventListener('click', () => setTimeout(saveRound));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') saveRound();
+});
+window.addEventListener('pagehide', saveRound);
+
+async function restoreRound() {
+  const r = (await load('round')) ?? {};
+  const keys = new Set(await photoKeys());
+  const scenes = [];
+  for (const x of r.scenes ?? []) {
+    const file = keys.delete(`photo:${x.id}`) && (await load(`photo:${x.id}`));
+    if (file) scenes.push(newScene(x.id, file, x.name, x.next ?? []));
+  }
+  // Photos of a round that ended before it was stored.
+  const d = await db;
+  const os = d.transaction('kv', 'readwrite').objectStore('kv');
+  for (const k of keys) os.delete(k);
+  if (!scenes.length) return;
+  const ids = new Set(scenes.map((s) => s.id));
+  sceneSeq = Math.max(sceneSeq, ...ids) + 1;
+  state.scenes = scenes;
+  state.current = ids.has(r.current) ? r.current : scenes.at(-1).id;
+  if (r.grid?.[0] === state.cols && r.grid?.[1] === state.rows) restoreMarks(r, ids);
+  run.restoring = true;
+  for (const s of scenes) s.remap = true;
+  renderThumbs();
+  pump();
+}
+
+function restoreMarks(r, ids) {
+  const ours = (x) => x && ids.has(x.sceneId);
+  const skipped = (r.skipped ?? []).filter(ours);
+  state.marks = (r.marks ?? []).filter((m) => m.kind === 'cell' || ours(m));
+  for (const x of [...state.marks, ...skipped, r.focus])
+    if (ours(x) && x.at) pieceAt.set(`${x.sceneId}:${x.index}`, x.at);
+  state.skipped = new Set(skipped.map((x) => `${x.sceneId}:${x.index}`));
+  state.skippedGaps = new Set(r.skippedGaps);
+  state.focus = ours(r.focus) ? r.focus : null;
+  state.gapFocus = r.gapFocus ?? null;
+  state.crop = r.crop ?? null;
+  for (const k of ['gapMode', 'gapModeChosen', 'table', 'tableChosen']) state[k] = !!r[k];
+  // The marks belong to this grid: photos analysed again must not move it.
+  if (state.marks.length) state.seamsDone = state.gridAuto = true;
+}
+
+// A photo analysed again: marks, skipped pieces and the piece shown move to
+// the piece now nearest their position in the photo, or are dropped.
+function remapMarks(sceneId, centers) {
+  const near = (at) => {
+    let best = null;
+    let bd = 0.03 ** 2;
+    centers.forEach(([x, y], i) => {
+      const d = (x - at[0]) ** 2 + (y - at[1]) ** 2;
+      if (d < bd) {
+        bd = d;
+        best = i;
+      }
+    });
+    return best;
+  };
+  const old = new Map([...pieceAt].filter(([k]) => splitKey(k)[0] === sceneId));
+  for (const k of old.keys()) pieceAt.delete(k);
+  const move = (x) => {
+    if (!x || x.sceneId !== sceneId) return x;
+    const at = x.at ?? old.get(`${sceneId}:${x.index}`);
+    const index = at ? near(at) : null;
+    if (index === null) return null;
+    pieceAt.set(`${sceneId}:${index}`, at);
+    return { ...x, index, at };
+  };
+  state.marks = state.marks.map(move).filter(Boolean);
+  state.focus = move(state.focus);
+  state.skipped = new Set(
+    [...state.skipped]
+      .map((k) => {
+        const [id, index] = splitKey(k);
+        const y = move({ sceneId: id, index });
+        return y && `${y.sceneId}:${y.index}`;
+      })
+      .filter(Boolean),
+  );
 }
 
 // ---------- Images ----------
@@ -402,6 +577,8 @@ async function saveRef() {
     cols: state.cols,
     rows: state.rows,
     gridManual: state.gridManual,
+    gridAuto: state.gridAuto,
+    seamsDone: state.seamsDone,
   });
 }
 
@@ -431,18 +608,8 @@ async function applyReference() {
   $('tab-scene').disabled = false;
   updateGridLabels();
   setStatus('Vorlage wird aufbereitet …');
-  const r = await call('reference', {
-    image: state.refImg.image,
-    quad: state.quad,
-    cols: state.cols,
-    rows: state.rows,
-    count: state.count,
-    cache: state.featCache,
-  });
-  if (r.cache) {
-    state.featCache = r.cache;
-    store('feat', r.cache).catch((err) => console.warn(err));
-  }
+  refGen++;
+  const r = await sendReference();
   const c = document.createElement('canvas');
   c.width = r.W;
   c.height = r.H;
@@ -455,12 +622,29 @@ async function applyReference() {
   drawRefPreview();
   setStatus('');
   // New grid: re-analyse existing photos (piece numbers change, so pieces
-  // marked as put in are forgotten).
+  // marked as put in are forgotten). One sent after the new grid stays.
   state.marks = [];
-  for (const s of state.scenes) s.busy = true;
+  for (const s of state.scenes) if (s.gen !== refGen) queueScene(s);
   renderThumbs();
-  for (const s of state.scenes) await analyze(s, false);
-  if (state.scenes.length) await solve();
+  await pump();
+}
+
+// Analyses started before the current reference are redone.
+let refGen = 0;
+async function sendReference() {
+  const r = await call('reference', {
+    image: state.refImg.image,
+    quad: state.quad,
+    cols: state.cols,
+    rows: state.rows,
+    count: state.count,
+    cache: state.featCache,
+  });
+  if (r.cache) {
+    state.featCache = r.cache;
+    store('feat', r.cache).catch((err) => console.warn(err));
+  }
+  return r;
 }
 
 function drawRefPreview() {
@@ -567,18 +751,11 @@ $('ref-recrop').addEventListener('click', () => {
 // ---------- Step 2: pieces photos ----------
 let sceneSeq = 1;
 for (const input of document.querySelectorAll('input[data-scene]')) {
-  input.addEventListener('change', async () => {
+  input.addEventListener('change', () => {
     const files = [...input.files];
     input.value = '';
     // Several photos: one search for places at the end.
-    for (const [i, f] of files.entries()) {
-      try {
-        await addScene(f, i === files.length - 1);
-      } catch (err) {
-        console.error(err);
-        setStatus(`${f.name}: ${err.message}`);
-      }
-    }
+    for (const f of files) addScene(f);
   });
 }
 
@@ -600,6 +777,7 @@ const sweep = {
   t: null, // where the camera is, core/track.js
   n: 0,
   done: 0,
+  run: 0, // number of the sweep, on its photos: counts them as analysed
   busy: false,
   chain: Promise.resolve(),
 };
@@ -897,12 +1075,12 @@ async function sweepShot(g) {
     sweep.n++;
     const file = new File([blob], `Schwenk-${Date.now()}.jpg`, { type: 'image/jpeg' });
     sweep.chain = sweep.chain
-      .then(async () => {
-        const s = await addScene(file, false, shot ? sweepNext(t, shot) : []);
+      .then(() => {
+        const s = addScene(file, shot ? sweepNext(t, shot) : []);
+        s.sweep = sweep.run;
         if (shot) shot.sceneId = s.id;
       })
-      .catch((err) => setStatus(err.message))
-      .then(() => sweep.done++);
+      .catch((err) => setStatus(err.message));
   } catch (err) {
     if (shot) t.shots.pop();
     setStatus(`Foto fehlgeschlagen: ${err.message}`);
@@ -953,11 +1131,19 @@ $('sweep-start').addEventListener('click', async () => {
   await v.play();
   sweepTracker(v);
   Object.assign(sweep, { n: 0, done: 0, grav: null });
-  senseTake();
-  window.addEventListener('devicemotion', onMotion);
+  sweep.run++;
   show('sweep', true);
   keepAwake();
   sweepSay(SWEEP_SAY.start);
+  // The first time: how to hold the phone. No photo is taken meanwhile.
+  if (localStorage.getItem('ph-sweep-hint') !== '1') {
+    show('sweep-hint', true);
+    await new Promise((r) => $('sweep-hint-ok').addEventListener('click', r, { once: true }));
+    show('sweep-hint', false);
+    localStorage.setItem('ph-sweep-hint', '1');
+  }
+  senseTake();
+  window.addEventListener('devicemotion', onMotion);
   sweep.timer = setInterval(sweepTick, 100);
 });
 
@@ -973,10 +1159,9 @@ $('sweep-done').addEventListener('click', async () => {
   show('sweep', false);
   keepAwake();
   sweep.t = null;
-  if (!sweep.n) return;
-  setStatus(`${sweep.n} ${sweep.n === 1 ? 'Foto wird' : 'Fotos werden'} ausgewertet …`);
   await sweep.chain;
-  await solve();
+  // The search for places, after the last photo still waiting.
+  pump();
 });
 
 // Shown photos at most this size: the full analysis size is only needed
@@ -996,50 +1181,256 @@ function smaller(canvas, max) {
   return c;
 }
 
+// A photo waiting for its analysis; decoded only when its turn comes.
+function newScene(id, file, name, next) {
+  const url = URL.createObjectURL(file);
+  return { id, next, canvas: null, image: null, file, full: null, name, url, busy: true, wait: true };
+}
+
 // next: ids of photos it overlaps (from a sweep), nearest first.
-async function addScene(file, thenSolve = true, next = []) {
-  const { canvas, image, full } = await decode(file, SCENE_MAX);
-  const s = {
-    id: sceneSeq++,
-    next,
-    canvas: smaller(canvas, VIEW_MAX),
-    image,
-    file,
-    full,
-    name: file.name,
-    url: URL.createObjectURL(file),
-    busy: true,
-  };
+function addScene(file, next = []) {
+  const s = newScene(sceneSeq++, file, file.name, next);
   state.scenes.push(s);
   state.current = s.id;
+  store(`photo:${s.id}`, file).then(saveRound, (err) => console.warn(err));
   renderThumbs();
-  await analyze(s, thenSolve);
+  pump();
   return s;
 }
 
-async function analyze(s, thenSolve) {
-  setStatus('Teile werden gesucht …');
+function queueScene(s) {
+  s.busy = true;
+  s.wait = true;
+}
+
+// ---------- Analysis, one photo at a time ----------
+// Photos wait in order; the search for places follows the last one, unless
+// the camera still runs. A progress bar on the photo analysed now and one for
+// all, with the time left as photos took on this device before.
+const run = {
+  active: false,
+  scene: null, // analysed now
+  done: 0, // photos finished in this run
+  stale: false, // a photo analysed since the last search for places
+  restoring: false,
+  jobs: { scene: null, solve: null }, // {t0, at, to, t, alone}
+  timer: 0,
+};
+const nextWaiting = () => state.scenes.find((x) => x.wait);
+
+async function pump() {
+  if (run.active) return;
+  run.active = true;
+  run.done = 0;
+  let solved = false;
+  try {
+    for (;;) {
+      const s = nextWaiting();
+      if (s) {
+        s.wait = false;
+        run.scene = s;
+        await analyze(s);
+        run.scene = null;
+        run.done++;
+        continue;
+      }
+      if (!run.stale || sweep.stream) break;
+      solved = (await placesAfter()) || solved;
+    }
+  } finally {
+    run.active = false;
+    run.scene = null;
+    run.restoring = false;
+    drawProgress();
+  }
+  if (solved) showStep();
+}
+
+// After the photos: the search for places.
+async function placesAfter() {
+  run.stale = false;
+  if (!state.scenes.some((s) => !s.busy && !s.error)) return false;
+  await solve();
+  return true;
+}
+
+// The step card in view (once the progress bar is gone).
+function showStep() {
+  if ($('step-scene').hidden || $('result').hidden) return;
+  const top = $('result').getBoundingClientRect().top + window.scrollY;
+  window.scrollTo({ top: top - document.querySelector('header').offsetHeight - 8, behavior: 'smooth' });
+}
+
+async function analyze(s) {
   state.tableImg = null;
+  const job = startJob('scene');
+  jobStatus(jobText('Foto wird geladen …'));
+  renderThumbs();
   let r = null;
   try {
-    // Pixels only for this call; a new analysis (new grid) decodes again.
-    const image = s.image ?? (await decode(s.file, SCENE_MAX)).image;
-    s.image = null;
-    r = await call('scene', { sceneId: s.id, image, next: s.next ?? [] }, [image.data.buffer]);
+    const image = await sceneImage(s);
+    if (!image) return;
+    // Removed meanwhile: stopped.
+    if (!state.scenes.includes(s)) return jobStatus('Abgebrochen.');
+    s.gen = refGen;
+    r = await call('scene', { sceneId: s.id, image, next: s.next ?? [] }, [image.data.buffer], (m) =>
+      progressed(job, m),
+    );
+    if (!state.scenes.includes(s)) {
+      jobStatus('Abgebrochen.');
+      await call('removeScene', { sceneId: s.id });
+      return;
+    }
+    // Analysed with the grid before: once more.
+    if (s.gen !== refGen) {
+      queueScene(s);
+      return;
+    }
     s.canvas = smaller(s.canvas, r.viewMax);
     for (const x of state.scenes) if (!x.busy || x === s) x.placed = r.placed.includes(x.id);
+    if (s.remap) remapMarks(s.id, r.centers);
+    s.remap = false;
     s.busy = false;
     s.error = null;
+    run.stale = true;
+    job.ok = true;
   } catch (err) {
+    if (err.message === STOPPED || !state.scenes.includes(s)) return jobStatus('Abgebrochen.');
     s.busy = false;
     s.error = err.message;
     setStatus(`Foto konnte nicht ausgewertet werden: ${err.message}`);
+  } finally {
+    endJob('scene');
+    if (s.sweep === sweep.run) sweep.done++;
   }
   renderThumbs();
   if (await gridFromSeams(r)) return;
   if (await gridFromPhoto(r)) return;
-  if (thenSolve) await solve();
 }
+
+// Pixels of the photo for the worker, only for this call (a new analysis,
+// new grid, decodes again); the view of it is kept. A photo the browser
+// cannot open (HEIC) is removed: null.
+async function sceneImage(s) {
+  let d;
+  try {
+    d = await decode(s.file, SCENE_MAX);
+  } catch (err) {
+    console.warn(err);
+    await removeScene(s.id);
+    setStatus(`${s.name}: ${err.message}`);
+    return null;
+  }
+  if (s.canvas) d.canvas.width = 0;
+  else {
+    s.canvas = smaller(d.canvas, VIEW_MAX);
+    s.full = d.full;
+  }
+  return d.image;
+}
+
+// Stop the photo analysed now (already out of the list). Without other
+// analysed photos a new worker is quickest; else the worker finishes it and
+// the result is dropped.
+function stopScene(s) {
+  s.cancelled = true;
+  // Still being decoded: analyze() stops before the worker.
+  if (![...pending.values()].some((p) => p.type === 'scene')) return;
+  if ([...pending].every(droppable) && !state.scenes.some((x) => !x.busy && !x.error)) restartWorker();
+  else jobStatus(STOPPING);
+}
+
+// ---------- Progress ----------
+// Seconds a photo and a search for places took on this device lately.
+const speed = JSON.parse(localStorage.getItem('ph-speed') ?? '{}');
+const GUESS = { scene: 20, solve: 4 };
+let thumbBar = null; // bar on the photo analysed now
+
+function startJob(kind) {
+  const now = performance.now();
+  // Waiting behind another call in the worker: not a measure of speed.
+  const job = { t0: now, t: now, at: 0, to: 0, alone: pending.size === 0, ok: false };
+  run.jobs[kind] = job;
+  run.timer ||= setInterval(drawProgress, 300);
+  drawProgress();
+  return job;
+}
+
+function endJob(kind) {
+  const j = run.jobs[kind];
+  run.jobs[kind] = null;
+  if (j?.ok && j.alone) {
+    const t = (performance.now() - j.t0) / 1000;
+    speed[kind] = speed[kind] ? 0.6 * speed[kind] + 0.4 * t : t;
+    localStorage.setItem('ph-speed', JSON.stringify(speed));
+  }
+  drawProgress();
+}
+
+function progressed(job, m) {
+  if (m.at !== undefined) Object.assign(job, { at: m.at, to: m.to, t: performance.now() });
+  if (job === (run.jobs.scene ?? run.jobs.solve))
+    jobStatus(run.scene?.cancelled ? STOPPING : jobText(m.text));
+  drawProgress();
+}
+
+const photosInRun = () =>
+  run.active ? run.done + state.scenes.filter((x) => x.wait).length + (run.scene ? 1 : 0) : 0;
+
+function jobText(text) {
+  const n = photosInRun();
+  const what = run.jobs.scene && n > 1 ? `Foto ${run.done + 1} von ${n}: ${text}` : text;
+  return run.restoring ? `Runde wird wiederhergestellt · ${what}` : what;
+}
+
+// Part of a job done: the step reached, and on through the step as the time
+// goes (at most to nine tenths of it, the step may take longer).
+function jobPart(kind) {
+  const j = run.jobs[kind];
+  if (!j) return 0;
+  const span = j.to - j.at;
+  const T = speed[kind] ?? GUESS[kind];
+  const k = span > 0 ? Math.min(0.9, (performance.now() - j.t) / 1000 / (span * T)) : 0;
+  return j.at + span * k;
+}
+
+function timeLeft(t) {
+  if (t < 10) return 'gleich fertig';
+  if (t < 60) return `noch etwa ${Math.ceil(t / 10) * 10} s`;
+  return `noch etwa ${Math.round(t / 60)} min`;
+}
+
+function drawProgress() {
+  const { scene, solve } = run.jobs;
+  if (!run.active && !scene && !solve) {
+    clearInterval(run.timer);
+    run.timer = 0;
+    show('progress', false);
+    return;
+  }
+  // In seconds: the photos of this run, then the search for places.
+  const T = speed.scene ?? GUESS.scene;
+  const S = speed.solve ?? GUESS.solve;
+  const n = photosInRun();
+  const total = n * T + S;
+  const done = scene || !solve ? (run.done + jobPart('scene')) * T : n * T + jobPart('solve') * S;
+  const part = Math.min(1, done / total);
+  $('progress-bar').style.width = `${(part * 100).toFixed(1)}%`;
+  if (thumbBar) thumbBar.style.width = `${(jobPart('scene') * 100).toFixed(1)}%`;
+  // Only once a photo was measured here: phones are several times slower.
+  $('progress-time').textContent = speed.scene ? timeLeft((1 - part) * total) : '';
+  $('progress-stop').hidden = !run.active || !!run.scene?.cancelled || (!run.scene && !nextWaiting());
+  show('progress', true);
+}
+
+// Stop the photos still to analyse: they are removed.
+$('progress-stop').addEventListener('click', () => {
+  const busy = state.scenes.filter((x) => x.busy);
+  // Waiting ones first: a new worker only if no analysed photo is left.
+  busy.sort((a, b) => Number(b.wait) - Number(a.wait));
+  jobStatus('Abgebrochen.');
+  for (const s of busy) removeScene(s.id);
+});
 
 // The seams of a finished part show where the pieces really are: the box
 // picture often shows a little more or less than the puzzle, and the count
@@ -1086,6 +1477,7 @@ async function gridFromPhoto(r) {
 function renderThumbs() {
   const box = $('thumbs');
   box.replaceChildren();
+  thumbBar = null;
   for (const s of state.scenes) {
     const b = document.createElement('div');
     b.className = `thumb${s.id === state.current ? ' on' : ''}`;
@@ -1098,7 +1490,10 @@ function renderThumbs() {
     if (s.busy) {
       const o = document.createElement('div');
       o.className = 'busy';
-      o.textContent = '…';
+      if (s === run.scene) {
+        thumbBar = document.createElement('i');
+        o.append(thumbBar);
+      } else o.textContent = s.wait ? 'wartet' : '…';
       b.append(o);
     } else if (s.placed === false) {
       // Neither the finished part nor an overlap with another photo.
@@ -1131,19 +1526,36 @@ function renderThumbs() {
 
 async function removeScene(id) {
   const s = state.scenes.find((x) => x.id === id);
+  if (!s) return;
   URL.revokeObjectURL(s.url);
   state.scenes = state.scenes.filter((x) => x.id !== id);
   state.marks = state.marks.filter((p) => p.sceneId !== id);
+  if (state.current === id) state.current = state.scenes.at(-1)?.id ?? null;
+  store(`photo:${id}`, undefined).catch((err) => console.warn(err));
+  saveRound();
+  // Not analysed yet: nothing in the worker or the result.
+  if (s.busy) {
+    if (s === run.scene) stopScene(s);
+    renderThumbs();
+    drawProgress();
+    return;
+  }
   state.tableImg = null;
   await call('removeScene', { sceneId: id });
-  if (state.current === id) state.current = state.scenes.at(-1)?.id ?? null;
   renderThumbs();
-  if (state.scenes.length) await solve();
+  if (state.scenes.some((x) => !x.busy && !x.error)) await solve();
   else {
     state.result = null;
     show('result', false);
     setStatus('');
+    sceneLayout();
   }
+}
+
+// With results the hint and the big buttons give way to one row, so that
+// the step card is in view.
+function sceneLayout() {
+  $('scene-head').classList.toggle('compact', !!state.result);
 }
 
 $('all-arrows').addEventListener('click', () => {
@@ -1202,23 +1614,28 @@ $('new-round').addEventListener('click', async () => {
   state.skippedGaps.clear();
   for (const s of state.scenes) URL.revokeObjectURL(s.url);
   state.scenes = [];
+  if (run.scene) stopScene(run.scene);
   state.current = null;
   state.result = null;
   state.tableImg = null;
   state.crop = null;
   state.edit = false;
+  pieceAt.clear();
+  clearRound().catch((err) => console.warn(err));
   await call('clearScenes');
   renderThumbs();
   show('result', false);
+  sceneLayout();
   keepAwake();
   setStatus('Setze die vorgeschlagenen Teile ein und fotografiere Puzzle und restliche Teile erneut.');
 });
 
 // All photos with the finished part as one picture of the table from above,
 // the puzzle upright as in the reference.
+// The status keeps the summary of the search: a note here would change its
+// size and move the step card under the finger.
 async function tableImage() {
   if (state.tableImg) return state.tableImg;
-  setStatus('Fotos werden zusammengesetzt …');
   const r = await call('table');
   const c = document.createElement('canvas');
   c.width = r.w;
@@ -1236,7 +1653,6 @@ async function tableImage() {
     corners: r.corners,
     quads: new Map(r.quads),
   };
-  setStatus('');
   return state.tableImg;
 }
 
@@ -1263,15 +1679,35 @@ function setStatus(t) {
   $('status').textContent = t;
 }
 
+// What runs now: with results in the bar at the bottom, so that the status
+// above the step card keeps its size and the card does not move.
+function jobStatus(t) {
+  if (state.result) $('progress-text').textContent = t;
+  else setStatus(t);
+}
+
 async function solve() {
-  setStatus('Plätze werden gesucht …');
-  const r = await call('solve', {
-    placed: state.marks.filter((m) => m.kind === 'placed'),
-    removed: state.marks.filter((m) => m.kind === 'removed'),
-    nofit: state.marks.filter((m) => m.kind === 'nofit'),
-    cells: state.marks.filter((m) => m.kind === 'cell').map(({ cell, free }) => ({ cell, free })),
-    crop: state.crop,
-  });
+  jobStatus('Plätze werden gesucht …');
+  const job = startJob('solve');
+  run.stale = false;
+  let r;
+  try {
+    r = await call(
+      'solve',
+      {
+        placed: state.marks.filter((m) => m.kind === 'placed'),
+        removed: state.marks.filter((m) => m.kind === 'removed'),
+        nofit: state.marks.filter((m) => m.kind === 'nofit'),
+        cells: state.marks.filter((m) => m.kind === 'cell').map(({ cell, free }) => ({ cell, free })),
+        crop: state.crop,
+      },
+      [],
+      (m) => progressed(job, m),
+    );
+    job.ok = true;
+  } finally {
+    endJob('solve');
+  }
   // Pieces put in are hidden; the next arrows move up.
   r.suggestions = r.suggestions.filter((s) => !s.placed);
   $('undo-placed').hidden = !state.marks.length;
@@ -1318,10 +1754,12 @@ async function solve() {
   if (r.scenes.some((s) => s.board)) msg += ' Puzzle im Foto gefunden – Pfeile zeigen auf den Platz.';
   setStatus(msg);
   show('result', true);
+  sceneLayout();
   state.queue = order;
   renderResult();
   renderSteps();
   keepAwake();
+  saveRound();
 }
 
 // ---------- Step by step ----------
@@ -2940,10 +3378,14 @@ $('map-box').addEventListener('toggle', () => {
       state.cols = saved.cols;
       state.rows = saved.rows;
       state.gridManual = saved.gridManual ?? false;
+      state.gridAuto = saved.gridAuto ?? false;
+      state.seamsDone = saved.seamsDone ?? false;
       state.featCache = await load('feat');
       await applyReference();
       showTab('step-scene');
-    }
+      // The photos and marks of the round before the reload.
+      await restoreRound();
+    } else await clearRound();
   } catch (err) {
     console.warn(err);
   }

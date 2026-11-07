@@ -31,6 +31,14 @@
             <label class="btn">Bild wählen<input type="file" accept="image/*" data-ref hidden /></label>
           </div>
           <p class="status" id="ref-error" role="alert" hidden></p>
+          <ol class="howto">
+            <li><b>Vorlage:</b> das Bild des fertigen Puzzles fotografieren.</li>
+            <li><b>Teilezahl</b> wählen, sie steht auf der Schachtel.</li>
+            <li>
+              <b>Teile</b> und das halbfertige Puzzle fotografieren. Die App zeigt, wo ein Teil hingehört; du tippst
+              <b>Passt</b> oder <b>Passt nicht</b>.
+            </li>
+          </ol>
         </div>
 
         <div id="ref-crop" hidden>
@@ -72,17 +80,34 @@
 
       <!-- Tab "Teile": photos of the loose pieces and the suggestions -->
       <section id="step-scene" class="page" hidden>
-        <p class="hint">
-          Lege die offenen Teile mit Abstand und Bildseite nach oben auf einen einfarbigen Tisch. Das halbfertige
-          Puzzle darf mit aufs Foto, dann zeigen Pfeile direkt auf den Platz.
-        </p>
-        <div class="row">
-          <button type="button" class="btn primary" id="sweep-start">Tisch abfahren</button>
-          <label class="btn">Foto aufnehmen<input type="file" accept="image/*" capture="environment" data-scene hidden /></label>
-          <label class="btn">Bild wählen<input type="file" accept="image/*" multiple data-scene hidden /></label>
+        <!-- With results: one compact row, so the step card is in view -->
+        <div id="scene-head" class="scene-head">
+          <p class="hint">
+            Lege die offenen Teile mit Abstand und Bildseite nach oben auf einen einfarbigen Tisch. Das halbfertige
+            Puzzle darf mit aufs Foto, dann zeigen Pfeile direkt auf den Platz.
+          </p>
+          <div class="row capture">
+            <button type="button" class="btn primary" id="sweep-start">
+              <span class="long">Tisch abfahren</span><span class="short">Abfahren</span>
+            </button>
+            <label class="btn">
+              <span class="long">Foto aufnehmen</span><span class="short">+ Foto</span>
+              <input type="file" accept="image/*" capture="environment" data-scene hidden />
+            </label>
+            <label class="btn">
+              <span class="long">Bild wählen</span><span class="short">+ Bild</span>
+              <input type="file" accept="image/*" multiple data-scene hidden />
+            </label>
+          </div>
+          <div id="thumbs" class="thumbs"></div>
         </div>
-        <div id="thumbs" class="thumbs"></div>
         <p id="status" class="status" role="status" aria-live="polite"></p>
+        <div id="progress" class="progress" hidden>
+          <span id="progress-text"></span>
+          <div class="bar"><i id="progress-bar"></i></div>
+          <span id="progress-time" class="muted"></span>
+          <button type="button" class="btn small" id="progress-stop">Abbrechen</button>
+        </div>
         <div id="result" hidden>
           <div id="step-mode" class="row" hidden>
             <button type="button" class="btn small" id="mode-gap">Nach Lücke</button>
@@ -159,6 +184,19 @@
         <div class="row">
           <button type="button" class="btn" id="sweep-shot">Foto jetzt</button>
           <button type="button" class="btn primary" id="sweep-done">Fertig</button>
+        </div>
+      </div>
+      <!-- Shown before the first sweep -->
+      <div id="sweep-hint" class="sweep-hint" hidden>
+        <div class="sweep-hint-box">
+          <h3>So fährst du den Tisch ab</h3>
+          <ol>
+            <li>Handy flach halten, etwa 30 cm über dem Tisch.</li>
+            <li>An einer Ecke des Puzzles beginnen.</li>
+            <li>Langsam Reihe für Reihe weiterfahren.</li>
+            <li>Bei <b>Halt</b> kurz stillhalten, dann entsteht ein Foto.</li>
+          </ol>
+          <button type="button" class="btn primary" id="sweep-hint-ok">Verstanden</button>
         </div>
       </div>
     </div>

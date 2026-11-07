@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- The round survives a reload or a closed tab: photos, Passt / Passt nicht,
+  skipped pieces and the crop come back and the photos are analysed again.
+  Each photo shows a progress bar, and one bar shows the whole queue, with
+  the time left as measured on this phone; "Abbrechen" or the cross on a
+  busy photo stops it. After the first result the photo buttons shrink to
+  one row and the step card scrolls into view. The start screen explains
+  the three steps, the first sweep shows how to hold the phone.
+
 ## 0.5.2 – 2026-11-07
 
 - Versions start at 0.5 (the first two releases, 0.45.0 and 0.45.1, are

@@ -332,6 +332,70 @@ canvas {
   margin: 0.5rem 0;
 }
 
+/* Bar on the photo analysed now. */
+.thumb .busy i {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 5px;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.3s linear;
+}
+
+/* Progress of all photos waiting, with the time left and a way to stop. */
+.progress[hidden] {
+  display: none;
+}
+
+.progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.8rem;
+  margin: -0.2rem 0 0.6rem;
+}
+
+.progress .bar {
+  flex: 1 0 100%;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.progress .bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.3s linear;
+}
+
+.progress span {
+  flex: 1;
+  font-size: 0.85rem;
+}
+
+/* Start screen: the three steps of a round. */
+.howto {
+  margin: 1.6rem 0 0;
+  padding: 0.8rem 1rem 0.8rem 2.2rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.howto li {
+  margin: 0.3rem 0;
+}
+
+.howto b {
+  color: var(--text);
+}
+
 .legend {
   display: flex;
   flex-wrap: wrap;
@@ -622,6 +686,46 @@ details.more summary {
   min-height: 3rem;
 }
 
+/* How to hold the phone, before the first sweep. */
+.sweep-hint[hidden] {
+  display: none;
+}
+
+.sweep-hint {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: #000c;
+}
+
+.sweep-hint-box {
+  max-width: 26rem;
+  padding: 1rem 1.2rem;
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.sweep-hint-box h3 {
+  margin-top: 0;
+}
+
+.sweep-hint-box ol {
+  margin: 0 0 1rem;
+  padding-left: 1.3rem;
+}
+
+.sweep-hint-box li {
+  margin: 0.4rem 0;
+}
+
+.sweep-hint-box .btn {
+  width: 100%;
+  justify-content: center;
+}
+
 .thumb .unplaced {
   position: absolute;
   left: 2px;
@@ -729,4 +833,96 @@ details.more summary {
 
 .step:not(.table) #step-undo {
   display: none;
+}
+
+/* Capture buttons: short labels in the compact row. */
+.capture .short {
+  display: none;
+}
+
+.scene-head.compact {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.scene-head.compact .hint {
+  display: none;
+}
+
+.scene-head.compact .capture {
+  flex: none;
+  flex-wrap: nowrap;
+  gap: 0.35rem;
+  margin: 0;
+}
+
+.scene-head.compact .capture .btn {
+  padding: 0.3rem 0.55rem;
+  min-height: 40px;
+  font-size: 0.88rem;
+}
+
+.scene-head.compact .capture .long {
+  display: none;
+}
+
+.scene-head.compact .capture .short {
+  display: inline;
+}
+
+.scene-head.compact .thumbs {
+  flex: 1;
+  min-width: 0;
+  gap: 0.3rem;
+  padding: 0;
+}
+
+.scene-head.compact .thumb {
+  width: 56px;
+  height: 42px;
+}
+
+.scene-head.compact .thumb .x {
+  width: 18px;
+  height: 18px;
+  font-size: 0.65rem;
+  line-height: 18px;
+}
+
+.scene-head.compact .thumb .unplaced {
+  font-size: 0;
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.scene-head.compact + .status {
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+/* With results the progress sits above the tab bar: nothing on the page
+   moves while the step card is in use. */
+#progress-text {
+  display: none;
+}
+
+.scene-head.compact ~ .progress {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(3.9rem + env(safe-area-inset-bottom));
+  z-index: 4;
+  margin: 0;
+  padding: 0.5rem 0.8rem;
+  background: #1d2a3a;
+  border-top: 1px solid var(--line);
+}
+
+.scene-head.compact ~ .progress #progress-text {
+  display: block;
+  flex: 1 0 100%;
+  font-size: 0.88rem;
 }
