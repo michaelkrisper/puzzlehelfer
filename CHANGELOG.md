@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.4 – 2026-11-07
 
 - Gap edges found at more places next to the frame and islands (a grid
   corner may lie up to 0.45 of a side off when the rim still runs corner to
