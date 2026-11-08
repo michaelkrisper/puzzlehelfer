@@ -38,44 +38,33 @@ jobs:
       # Chrome is preinstalled on the runner.
       - run: npm run test:e2e
 
-  # Every successful run on main is a patch release (tools/release.mjs):
-  # commit and tag it on top of the tested commit. If main moved on in the
-  # meantime, the newer run releases both. Pushes with the GITHUB_TOKEN start
-  # no workflow run, so this does not loop.
-  release:
-    name: Version
-    needs: check
+  # Tags every tested commit on main with the next patch version (vX.Y.Z).
+  version:
+    name: Version tag
+    needs: [check]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     concurrency:
-      group: release
+      group: version-tag
       cancel-in-progress: false
     outputs:
-      sha: ${{ steps.bump.outputs.sha }}
-      version: ${{ steps.bump.outputs.version }}
+      version: ${{ steps.tag.outputs.version }}
     steps:
       - uses: actions/checkout@v7
-      - id: bump
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          v=$(node tools/release.mjs)
-          git commit -qam "Release $v"
-          git tag "v$v"
-          if git push --atomic origin HEAD:main "refs/tags/v$v"; then
-            echo "version=$v" >> "$GITHUB_OUTPUT"
-            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          else
-            echo "main moved on; the newer run releases"
-          fi
+        with:
+          fetch-depth: 0
+      - id: tag
+        run: python3 .github/scripts/release.py tag
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   deploy:
     name: GitHub Pages
-    needs: release
-    if: needs.release.outputs.sha != ''
+    # Only commits that got a version tag: a re-run of an older run deploys nothing.
+    needs: [check, version]
+    if: needs.version.outputs.version != ''
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -88,8 +77,8 @@ jobs:
       url: ${{ steps.pages.outputs.page_url }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.release.outputs.sha }}
+      - name: Stamp version
+        run: node tools/stamp-version.mjs "${{ needs.version.outputs.version }}"
       - name: Assemble site
         run: |
           mkdir _site

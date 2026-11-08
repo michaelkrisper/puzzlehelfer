@@ -1,6 +1,7 @@
 # Puzzlehelfer
 
 [![CI](https://github.com/michaelkrisper/puzzlehelfer/actions/workflows/ci.yml/badge.svg)](https://github.com/michaelkrisper/puzzlehelfer/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/github/v/tag/michaelkrisper/puzzlehelfer?sort=semver&label=version)](https://github.com/michaelkrisper/puzzlehelfer/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![PWA](https://img.shields.io/badge/PWA-works%20offline-5a0fc8)](https://michaelkrisper.github.io/puzzlehelfer/)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A524-339933)](.nvmrc)
@@ -193,9 +194,11 @@ python3 tools/synth.py --image tests/fixtures/picture.jpg --pieces 100 --seed 1 
 node tools/bench.mjs /path/scene [--badref]
 ```
 
-Every successful merge on main is a patch release: CI raises the version
-and tags it ([`tools/release.mjs`](tools/release.mjs), see
-[CONTRIBUTING.md](CONTRIBUTING.md)).
+Every successful merge on main is tagged with the next patch version, and the
+deploy stamps it into the app
+([`tools/stamp-version.mjs`](tools/stamp-version.mjs)). Bundled releases with
+notes come from the Release workflow, see
+[CONTRIBUTING.md](CONTRIBUTING.md#versions-and-releases).
 
 ## Limits
 
