@@ -68,9 +68,9 @@ void knn_hamming(const uint8_t *q, int nq, const uint8_t *r, int nr, int bytes, 
   }
 }
 
-static inline v128_t sqsum(const v128_t *qlo, const v128_t *qhi, const uint8_t *rp, int nv) {
+static inline v128_t sqsum(const v128_t *qlo, const v128_t *qhi, const uint8_t *rp, int k0, int k1) {
   v128_t acc = wasm_i32x4_splat(0);
-  for (int k = 0; k < nv; k++) {
+  for (int k = k0; k < k1; k++) {
     v128_t v = wasm_v128_load(rp + k * 16);
     v128_t dl = wasm_i16x8_sub(qlo[k], wasm_u16x8_extend_low_u8x16(v));
     v128_t dh = wasm_i16x8_sub(qhi[k], wasm_u16x8_extend_high_u8x16(v));
@@ -81,8 +81,13 @@ static inline v128_t sqsum(const v128_t *qlo, const v128_t *qhi, const uint8_t *
 
 // Squared L2 distance of unsigned bytes (SIFT descriptors are integers
 // 0..255, so this is exact), bytes a multiple of 16 and at most 256.
+// Four rows at a time; once the partial sums of all four reach the second
+// best distance so far, the rest of them cannot change the result and is
+// skipped (SIFT against the reference: a third less work).
 void knn_l2u8(const uint8_t *q, int nq, const uint8_t *r, int nr, int bytes, int32_t *out) {
   int nv = bytes / 16;
+  int h1 = nv / 2;
+  int h2 = (3 * nv) / 4;
   for (int i = 0; i < nq; i++) {
     v128_t qlo[16], qhi[16];
     for (int k = 0; k < nv; k++) {
@@ -95,12 +100,26 @@ void knn_l2u8(const uint8_t *q, int nq, const uint8_t *r, int nr, int bytes, int
     int j = 0;
     for (; j + 4 <= nr; j += 4) {
       const uint8_t *rp = r + j * bytes;
-      keep4(hsum4(sqsum(qlo, qhi, rp, nv), sqsum(qlo, qhi, rp + bytes, nv), sqsum(qlo, qhi, rp + 2 * bytes, nv),
-                  sqsum(qlo, qhi, rp + 3 * bytes, nv)),
-            j, &b, &s, &bi);
+      v128_t a0 = sqsum(qlo, qhi, rp, 0, h1);
+      v128_t a1 = sqsum(qlo, qhi, rp + bytes, 0, h1);
+      v128_t a2 = sqsum(qlo, qhi, rp + 2 * bytes, 0, h1);
+      v128_t a3 = sqsum(qlo, qhi, rp + 3 * bytes, 0, h1);
+      if (!wasm_v128_any_true(wasm_u32x4_lt(hsum4(a0, a1, a2, a3), wasm_u32x4_splat(s)))) continue;
+      if (h2 > h1) {
+        a0 = wasm_i32x4_add(a0, sqsum(qlo, qhi, rp, h1, h2));
+        a1 = wasm_i32x4_add(a1, sqsum(qlo, qhi, rp + bytes, h1, h2));
+        a2 = wasm_i32x4_add(a2, sqsum(qlo, qhi, rp + 2 * bytes, h1, h2));
+        a3 = wasm_i32x4_add(a3, sqsum(qlo, qhi, rp + 3 * bytes, h1, h2));
+        if (!wasm_v128_any_true(wasm_u32x4_lt(hsum4(a0, a1, a2, a3), wasm_u32x4_splat(s)))) continue;
+      }
+      a0 = wasm_i32x4_add(a0, sqsum(qlo, qhi, rp, h2, nv));
+      a1 = wasm_i32x4_add(a1, sqsum(qlo, qhi, rp + bytes, h2, nv));
+      a2 = wasm_i32x4_add(a2, sqsum(qlo, qhi, rp + 2 * bytes, h2, nv));
+      a3 = wasm_i32x4_add(a3, sqsum(qlo, qhi, rp + 3 * bytes, h2, nv));
+      keep4(hsum4(a0, a1, a2, a3), j, &b, &s, &bi);
     }
     for (; j < nr; j++) {
-      v128_t w = sqsum(qlo, qhi, r + j * bytes, nv);
+      v128_t w = sqsum(qlo, qhi, r + j * bytes, 0, nv);
       keep(wasm_i32x4_extract_lane(w, 0) + wasm_i32x4_extract_lane(w, 1) + wasm_i32x4_extract_lane(w, 2) +
                wasm_i32x4_extract_lane(w, 3),
            j, &b, &s, &bi);
