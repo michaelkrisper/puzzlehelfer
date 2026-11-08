@@ -48,11 +48,12 @@ function call(type, payload = {}, transfer = [], progress = null) {
   });
 }
 
-// A photo cannot be stopped inside the worker: a new worker gets the
-// reference again (stored feature points make that quick) but loses every
-// photo analysed, so this is only for when there is none, and only while
-// the calls waiting can go: photos (stopped), removing photos (none left)
-// and the reference for an earlier new worker (sent again).
+// A photo cannot be stopped inside the worker, which reads messages only
+// between them: a new worker gets the reference again (stored feature points
+// make that quick) and the photos analysed so far from their stored analyses
+// (worker.js keep). Only while the calls waiting can go: photos (stopped, or
+// sent again), removing photos (none left) and the reference for an earlier
+// new worker (sent again).
 const STOPPED = 'Abgebrochen';
 const STOPPING = 'Wird abgebrochen, sobald das Foto fertig gerechnet ist …';
 let resendId = 0;
@@ -72,6 +73,21 @@ function restartWorker() {
   if (!state.refView) return;
   resendId = nextId;
   sendReference().catch((err) => err.message !== STOPPED && console.warn(err));
+  for (const s of state.scenes) if (!s.busy && !s.error) restoreScene(s);
+}
+
+// An analysed photo into a new worker; analysed again if its stored analysis
+// is missing.
+function restoreScene(s) {
+  call('scene', { sceneId: s.id, next: s.next ?? [], key: analysisKey(s) }).then(
+    (r) => {
+      if (!r.miss || !state.scenes.includes(s)) return;
+      queueScene(s);
+      renderThumbs();
+      pump();
+    },
+    (err) => err.message !== STOPPED && console.warn(err),
+  );
 }
 
 // ---------- Storage (IndexedDB) ----------
@@ -102,20 +118,23 @@ async function load(key) {
 // The photos of the round, stored once each as the original file ('photo:'
 // up to the next character, ';').
 const PHOTOS = IDBKeyRange.bound('photo:', 'photo;', false, true);
-async function photoKeys() {
+// Their analyses, stored by the worker (worker.js keep).
+const ANALYSES = IDBKeyRange.bound('analysis:', 'analysis;', false, true);
+async function photoKeys(range = PHOTOS) {
   const d = await db;
   return new Promise((resolve, reject) => {
-    const r = d.transaction('kv').objectStore('kv').getAllKeys(PHOTOS);
+    const r = d.transaction('kv').objectStore('kv').getAllKeys(range);
     r.onsuccess = () => resolve(r.result);
     r.onerror = () => reject(r.error);
   });
 }
 
 // ---------- Round (survives a reload) ----------
-// Android may end the tab while the camera app is open: photos and marks
-// are kept, and on start the photos are analysed again (the analyses live in
-// the worker and are too big to store). Marks name pieces by their number in
-// a photo, which a new analysis may change, so their position goes along.
+// Android may end the tab while the camera app is open: photos, their
+// analyses and marks are kept. A photo whose analysis does not fit the
+// reference, grid or app version any more is analysed again. Marks name
+// pieces by their number in a photo, which a new analysis may change, so
+// their position goes along.
 const pieceAt = new Map(); // `${sceneId}:${index}` → position from a stored round
 
 function positionOf(sceneId, index) {
@@ -155,7 +174,9 @@ function saveRound() {
 async function clearRound() {
   await store('round', undefined);
   const d = await db;
-  d.transaction('kv', 'readwrite').objectStore('kv').delete(PHOTOS);
+  const os = d.transaction('kv', 'readwrite').objectStore('kv');
+  os.delete(PHOTOS);
+  os.delete(ANALYSES);
 }
 // After every tap on the results (skip, choices, marks: after the handlers),
 // and when switching to the camera app, where the tab may end.
@@ -173,10 +194,12 @@ async function restoreRound() {
     const file = keys.delete(`photo:${x.id}`) && (await load(`photo:${x.id}`));
     if (file) scenes.push(newScene(x.id, file, x.name, x.next ?? []));
   }
-  // Photos of a round that ended before it was stored.
+  // Photos of a round that ended before it was stored, and analyses of
+  // photos no longer in the round.
+  const stale = (await photoKeys(ANALYSES)).filter((k) => !scenes.some((s) => k === `analysis:${s.id}`));
   const d = await db;
   const os = d.transaction('kv', 'readwrite').objectStore('kv');
-  for (const k of keys) os.delete(k);
+  for (const k of [...keys, ...stale]) os.delete(k);
   if (!scenes.length) return;
   const ids = new Set(scenes.map((s) => s.id));
   sceneSeq = Math.max(sceneSeq, ...ids) + 1;
@@ -271,7 +294,8 @@ async function bitmapOf(blob) {
   }
 }
 
-async function decode(blob, max) {
+// pixels: false for a view only (no ImageData).
+async function decode(blob, max, pixels = true) {
   const bmp = await bitmapOf(blob);
   const f = Math.min(1, max / Math.max(bmp.width, bmp.height));
   const w = Math.round(bmp.width * f);
@@ -283,7 +307,7 @@ async function decode(blob, max) {
   g.drawImage(bmp, 0, 0, w, h);
   const full = [bmp.width, bmp.height];
   bmp.close();
-  return { canvas: c, image: g.getImageData(0, 0, w, h), full };
+  return { canvas: c, image: pixels ? g.getImageData(0, 0, w, h) : null, full };
 }
 
 // density: canvas pixels per CSS pixel, by default the device's; more for
@@ -1183,9 +1207,55 @@ function smaller(canvas, max) {
 
 // A photo waiting for its analysis; decoded only when its turn comes.
 function newScene(id, file, name, next) {
-  const url = URL.createObjectURL(file);
-  return { id, next, canvas: null, image: null, file, full: null, name, url, busy: true, wait: true };
+  const s = {
+    id,
+    next,
+    canvas: null,
+    image: null,
+    file,
+    full: null,
+    name,
+    thumb: null,
+    busy: true,
+    wait: true,
+  };
+  makeThumb(s);
+  return s;
 }
+
+// Small copies for the row of photos, one after the other: an <img> of the
+// file would hold the whole decoded photo (48 MB at 12 MP) in memory.
+let thumbs = Promise.resolve();
+function makeThumb(s) {
+  thumbs = thumbs
+    .then(async () => {
+      const bmp = await bitmapOf(s.file).catch(() => null);
+      if (!bmp) return;
+      // Covers .thumb (84 × 64 px in style.css).
+      const c = document.createElement('canvas');
+      const dpr = Math.min(3, window.devicePixelRatio || 1);
+      c.width = Math.round(84 * dpr);
+      c.height = Math.round(64 * dpr);
+      const k = Math.max(c.width / bmp.width, c.height / bmp.height);
+      const g = c.getContext('2d');
+      g.imageSmoothingQuality = 'high';
+      g.drawImage(
+        bmp,
+        (c.width - bmp.width * k) / 2,
+        (c.height - bmp.height * k) / 2,
+        bmp.width * k,
+        bmp.height * k,
+      );
+      bmp.close();
+      s.thumb = c;
+      if (state.scenes.includes(s)) renderThumbs();
+    })
+    .catch((err) => console.warn(err));
+}
+
+// Which file the worker's stored analysis of a photo was made of, by which
+// version of the app.
+const analysisKey = (s) => `${APP_VERSION}:${s.file.size}:${s.file.lastModified ?? 0}`;
 
 // next: ids of photos it overlaps (from a sweep), nearest first.
 function addScene(file, next = []) {
@@ -1268,16 +1338,11 @@ async function analyze(s) {
   renderThumbs();
   let r = null;
   try {
-    const image = await sceneImage(s);
-    if (!image) return;
-    // Removed meanwhile: stopped.
-    if (!state.scenes.includes(s)) return jobStatus('Abgebrochen.');
-    s.gen = refGen;
-    r = await call('scene', { sceneId: s.id, image, next: s.next ?? [] }, [image.data.buffer], (m) =>
-      progressed(job, m),
-    );
+    r = await sceneResult(s, job);
+    if (!r) return;
     if (!state.scenes.includes(s)) {
       jobStatus('Abgebrochen.');
+      store(`analysis:${s.id}`, undefined).catch((err) => console.warn(err));
       await call('removeScene', { sceneId: s.id });
       return;
     }
@@ -1290,6 +1355,7 @@ async function analyze(s) {
     for (const x of state.scenes) if (!x.busy || x === s) x.placed = r.placed.includes(x.id);
     if (s.remap) remapMarks(s.id, r.centers);
     s.remap = false;
+    s.kept = r.kept;
     s.busy = false;
     s.error = null;
     run.stale = true;
@@ -1308,13 +1374,44 @@ async function analyze(s) {
   if (await gridFromPhoto(r)) return;
 }
 
+// The worker's analysis of a photo: after a reload the stored one if it
+// still fits (only the view of the photo is decoded then), else a new one.
+// null if the photo was removed meanwhile.
+async function sceneResult(s, job) {
+  const gone = () => {
+    if (state.scenes.includes(s)) return false;
+    jobStatus('Abgebrochen.');
+    return true;
+  };
+  if (s.remap) {
+    if (!s.canvas && !(await sceneImage(s, false))) return null;
+    if (gone()) return null;
+    s.gen = refGen;
+    const r = await call('scene', { sceneId: s.id, next: s.next ?? [], key: analysisKey(s) });
+    if (!r.miss) {
+      // No measure of speed.
+      job.alone = false;
+      return r;
+    }
+  }
+  const image = await sceneImage(s);
+  if (!image || gone()) return null;
+  s.gen = refGen;
+  return call(
+    'scene',
+    { sceneId: s.id, image, next: s.next ?? [], key: analysisKey(s) },
+    [image.data.buffer],
+    (m) => progressed(job, m),
+  );
+}
+
 // Pixels of the photo for the worker, only for this call (a new analysis,
 // new grid, decodes again); the view of it is kept. A photo the browser
-// cannot open (HEIC) is removed: null.
-async function sceneImage(s) {
+// cannot open (HEIC) is removed: null. pixels false: only the view, true.
+async function sceneImage(s, pixels = true) {
   let d;
   try {
-    d = await decode(s.file, SCENE_MAX);
+    d = await decode(s.file, pixels ? SCENE_MAX : VIEW_MAX, pixels);
   } catch (err) {
     console.warn(err);
     await removeScene(s.id);
@@ -1326,17 +1423,19 @@ async function sceneImage(s) {
     s.canvas = smaller(d.canvas, VIEW_MAX);
     s.full = d.full;
   }
-  return d.image;
+  return d.image ?? true;
 }
 
-// Stop the photo analysed now (already out of the list). Without other
-// analysed photos a new worker is quickest; else the worker finishes it and
-// the result is dropped.
+// Stop the photo analysed now (already out of the list): a new worker, which
+// gets the analysed photos back from the database. Not while calls are
+// waiting that cannot go or an analysis could not be stored: the worker
+// finishes the photo then and the result is dropped.
 function stopScene(s) {
   s.cancelled = true;
   // Still being decoded: analyze() stops before the worker.
   if (![...pending.values()].some((p) => p.type === 'scene')) return;
-  if ([...pending].every(droppable) && !state.scenes.some((x) => !x.busy && !x.error)) restartWorker();
+  const back = state.scenes.every((x) => x.busy || x.error || x.kept);
+  if (back && [...pending].every(droppable)) restartWorker();
   else jobStatus(STOPPING);
 }
 
@@ -1483,10 +1582,7 @@ function renderThumbs() {
     b.className = `thumb${s.id === state.current ? ' on' : ''}`;
     b.role = 'button';
     b.tabIndex = 0;
-    const img = document.createElement('img');
-    img.src = s.url;
-    img.alt = `Foto ${s.id}`;
-    b.append(img);
+    if (s.thumb) b.append(s.thumb);
     if (s.busy) {
       const o = document.createElement('div');
       o.className = 'busy';
@@ -1527,11 +1623,11 @@ function renderThumbs() {
 async function removeScene(id) {
   const s = state.scenes.find((x) => x.id === id);
   if (!s) return;
-  URL.revokeObjectURL(s.url);
   state.scenes = state.scenes.filter((x) => x.id !== id);
   state.marks = state.marks.filter((p) => p.sceneId !== id);
   if (state.current === id) state.current = state.scenes.at(-1)?.id ?? null;
   store(`photo:${id}`, undefined).catch((err) => console.warn(err));
+  store(`analysis:${id}`, undefined).catch((err) => console.warn(err));
   saveRound();
   // Not analysed yet: nothing in the worker or the result.
   if (s.busy) {
@@ -1612,7 +1708,6 @@ $('new-round').addEventListener('click', async () => {
   state.focus = null;
   state.gapFocus = null;
   state.skippedGaps.clear();
-  for (const s of state.scenes) URL.revokeObjectURL(s.url);
   state.scenes = [];
   if (run.scene) stopScene(run.scene);
   state.current = null;
@@ -1636,7 +1731,15 @@ $('new-round').addEventListener('click', async () => {
 // size and move the step card under the finger.
 async function tableImage() {
   if (state.tableImg) return state.tableImg;
-  const r = await call('table');
+  // The worker keeps no pixels of the photos: the views here go along.
+  const images = state.scenes
+    .filter((x) => !x.busy && !x.error && x.placed && x.canvas)
+    .map((x) => [x.id, x.canvas.getContext('2d').getImageData(0, 0, x.canvas.width, x.canvas.height)]);
+  const r = await call(
+    'table',
+    { images },
+    images.map(([, im]) => im.data.buffer),
+  );
   const c = document.createElement('canvas');
   c.width = r.w;
   c.height = r.h;

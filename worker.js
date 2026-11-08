@@ -27,7 +27,6 @@ let ref = null;
 let refQuad = null;
 let refCount = 0; // piece count from the box
 const scenes = new Map(); // id → result of analyzeScene
-const previews = new Map(); // id → photo at most 2400 px, for the table view
 const points = new Map(); // id → ORB points, to lay photos onto each other
 const near = new Map(); // id → photos of the sweep next to it, nearest first
 const tried = new Set(); // pairs of photos compared, `${id}:${other}`
@@ -87,36 +86,64 @@ function scaleHint(image) {
 
 function forget() {
   scenes.clear();
-  previews.clear();
   points.clear();
   near.clear();
   tried.clear();
   table = null;
 }
 
-function shrink(image, max) {
-  const f = Math.min(1, max / Math.max(image.width, image.height));
-  if (f === 1) return image;
-  const src = cv.matFromImageData(image);
-  const dst = new cv.Mat();
-  cv.resize(
-    src,
-    dst,
-    new cv.Size(Math.round(image.width * f), Math.round(image.height * f)),
-    0,
-    0,
-    cv.INTER_AREA,
-  );
-  const out = { data: new Uint8ClampedArray(dst.data), width: dst.cols, height: dst.rows };
-  src.delete();
-  dst.delete();
-  return out;
-}
-
 // Shown photos with pieces of about 65 px, at least 1200 and at most 2400 px:
 // a sweep 30 cm over the table brings many photos with large pieces.
-const viewMax = (image, s) =>
-  Math.round(Math.min(2400, Math.max(1200, 0.75 * s.scale * Math.max(image.width, image.height))));
+// size: longer side of the photo as analysed.
+const viewMax = (size, s) => Math.round(Math.min(2400, Math.max(1200, 0.75 * s.scale * size)));
+
+// Analyses are stored in the app's database: after a reload, or in a new
+// worker after a stop, a photo comes back in a moment instead of being
+// analysed again (minutes on a phone). Stored under the photo's id with the
+// app's key (version, file) and the reference and grid they were made with.
+const db = new Promise((resolve) => {
+  if (!self.indexedDB) return resolve(null);
+  const r = indexedDB.open('puzzlehelfer', 1);
+  r.onupgradeneeded = () => r.result.createObjectStore('kv');
+  r.onsuccess = () => resolve(r.result);
+  r.onerror = () => resolve(null);
+});
+// The result of one request, or null if anything fails (no stored analysis:
+// the photo is analysed as without one).
+async function request(mode, f) {
+  const d = await db;
+  if (!d) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = d.transaction('kv', mode);
+      const r = f(tx.objectStore('kv'));
+      tx.oncomplete = () => resolve(r.result ?? null);
+      tx.onabort = () => {
+        console.warn(tx.error);
+        resolve(null);
+      };
+    } catch (err) {
+      console.warn(err);
+      resolve(null);
+    }
+  });
+}
+const stored = (sceneId) => request('readonly', (os) => os.get(`analysis:${sceneId}`));
+const keep = (sceneId, value) => request('readwrite', (os) => os.put(value, `analysis:${sceneId}`));
+// A copy without functions (feature matches carry one for the groups found
+// during the analysis), which cannot be stored.
+function plain(v, seen = new Map()) {
+  if (typeof v === 'function') return undefined;
+  if (!v || typeof v !== 'object' || ArrayBuffer.isView(v)) return v;
+  if (seen.has(v)) return seen.get(v);
+  const o = Array.isArray(v) ? [] : {};
+  seen.set(v, o);
+  for (const k of Object.keys(v)) {
+    const x = plain(v[k], seen);
+    if (x !== undefined || Array.isArray(v)) o[k] = x;
+  }
+  return o;
+}
 
 // Steps of one photo (analyzeScene, then laying it onto the others here) and
 // where each starts as part of the time the photo takes (Cats photos,
@@ -212,15 +239,29 @@ const handlers = {
     const view = PH.reference.rectify(cv, image, quad, Math.round(ref.W * f), Math.round(ref.H * f));
     return { rgba: ref.rgba.data, W: ref.W, H: ref.H, C: ref.C, cache: fresh, view };
   },
-  scene({ id, sceneId, image, next = [] }) {
+  // Without image: the stored analysis, or {miss: true}.
+  async scene({ id, sceneId, image = null, next = [], key = '' }) {
     if (!ref) throw new Error('Keine Vorlage');
-    const progress = progressFor(id, sceneStep);
-    const s = PH.pipeline.analyzeScene(cv, image, ref, progress, { scale: scaleHint(image), table });
-    progress(PLACING);
+    const made = `${key}:${ref.key}:${ref.cols}x${ref.rows}`;
+    let s;
+    let pts;
+    // Whether the analysis is in the database (a new worker can get it back).
+    let kept = true;
+    if (!image) {
+      const r = await stored(sceneId);
+      if (r?.made !== made) return { miss: true };
+      ({ s, points: pts } = r);
+    } else {
+      const progress = progressFor(id, sceneStep);
+      s = PH.pipeline.analyzeScene(cv, image, ref, progress, { scale: scaleHint(image), table });
+      progress(PLACING);
+      pts = PH.stitch.describe(cv, image);
+      // As analysed: placing and solving add to it.
+      kept = !!(await keep(sceneId, { made, s: plain(s), points: pts }));
+    }
     if (s.table) table = s.table;
     scenes.set(sceneId, s);
-    previews.set(sceneId, shrink(image, viewMax(image, s)));
-    points.set(sceneId, PH.stitch.describe(cv, image));
+    points.set(sceneId, pts);
     near.set(sceneId, next);
     placeAll();
     return {
@@ -232,17 +273,20 @@ const handlers = {
       border: s.board?.border ?? null,
       aspect: ref.hi.w / ref.hi.h,
       seams: seamQuad(s.board?.seams),
-      viewMax: viewMax(image, s),
+      viewMax: viewMax(pts.size, s),
       centers: centers(s),
+      kept,
     };
   },
-  // All photos with the puzzle as one picture from above.
-  table() {
+  // All photos with the puzzle as one picture from above. images: [sceneId,
+  // ImageData] of the photos laid onto the table, as shown by the app.
+  table({ images }) {
     const ids = [...scenes.keys()];
+    const shown = new Map(images);
     const t = PH.pipeline.tableView(
       cv,
       ids.map((k) => scenes.get(k)),
-      ids.map((k) => previews.get(k)),
+      ids.map((k) => shown.get(k)),
       ref,
     );
     if (!t) throw new Error('Kein Foto zeigt den fertigen Teil');
@@ -250,7 +294,6 @@ const handlers = {
   },
   removeScene({ sceneId }) {
     scenes.delete(sceneId);
-    previews.delete(sceneId);
     points.delete(sceneId);
     near.delete(sceneId);
     return {};
@@ -297,15 +340,19 @@ const handlers = {
   },
 };
 
-self.onmessage = async (e) => {
+// One message after the other, also while one waits for the database.
+let queue = ready;
+self.onmessage = (e) => {
+  queue = queue.then(() => handle(e)).catch((err) => console.error(err));
+};
+async function handle(e) {
   const { id, type } = e.data;
-  await ready;
   try {
-    const data = handlers[type](e.data);
+    const data = await handlers[type](e.data);
     // The table picture (up to 48 MB) goes over without a copy.
     postMessage({ type: 'result', id, data }, type === 'table' ? [data.rgba.buffer] : []);
   } catch (err) {
     console.error(err);
     postMessage({ type: 'error', id, message: String(err?.message ?? err) });
   }
-};
+}
