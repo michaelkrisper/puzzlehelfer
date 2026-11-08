@@ -106,8 +106,9 @@
     if (!seams?.x || !seams?.y) return null;
     const axis = (a, K, k) => {
       const frame = a.hi - a.lo > 0.9 * K;
-      const q0 = ((frame ? a.hi - a.lo : K) / k) * 0.97;
-      const q1 = (K / k) * 1.03;
+      const e = frame ? a.hi - a.lo : K;
+      const q0 = (Math.min(e, K) / k) * 0.97;
+      const q1 = (Math.max(e, K) / k) * 1.03;
       let best = null;
       for (let i = 0; i < a.sc.length; i++) {
         const per = a.p0 + i * a.dp;

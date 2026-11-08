@@ -1453,17 +1453,26 @@
     const DP = 0.002;
     const NP = 331;
     const { C, cols, rows } = ref;
-    // Without the local field: it already pulls the grid onto the seams.
-    const { d, m, W, H } = seamImage(cv, { H: board.H, corr: board.corr }, ref, sceneGray, bigMask, F);
+    // Without the local field: it already pulls the grid onto the seams. One
+    // place beyond the box all round: where the box picture shows less than
+    // the puzzle, the frame's real edges lie outside it (Great Wave: half a
+    // place in x). Pixels there count to the edge places.
+    const { d, m, W, H } = seamImage(cv, { H: board.H, corr: board.corr }, ref, sceneGray, bigMask, F, [
+      -C,
+      -C,
+      ref.W + C,
+      ref.H + C,
+    ]);
+    const place = (v, n) => Math.min(n - 1, Math.max(0, Math.floor(v / F / C) - 1));
     const filled = new Set(board.filled);
     const px = new Float64Array(W);
     const py = new Float64Array(H);
     const nx = new Float64Array(W);
     const ny = new Float64Array(H);
     for (let y = 0; y < H; y++) {
-      const r = Math.floor(y / F / C);
+      const r = place(y, rows);
       for (let x = 0; x < W; x++) {
-        if (!filled.has(r * cols + Math.floor(x / F / C)) || !m[y * W + x]) continue;
+        if (!filled.has(r * cols + place(x, cols)) || !m[y * W + x]) continue;
         const v = d[y * W + x];
         px[x] += v;
         nx[x]++;
@@ -1510,14 +1519,14 @@
           s /= hits * 2 * base;
           if (s > sc[k]) {
             sc[k] = s;
-            ph[k] = o / cF;
+            ph[k] = o / cF - 1;
           }
         }
       }
-      return { lo: lo / cF, hi: (hi + 1) / cF, p0: P0, dp: DP, sc, ph };
+      return { lo: lo / cF - 1, hi: (hi + 1) / cF - 1, p0: P0, dp: DP, sc, ph };
     };
-    const gx = axis(px, nx, cols, H);
-    const gy = axis(py, ny, rows, W);
+    const gx = axis(px, nx, cols, ref.H * F);
+    const gy = axis(py, ny, rows, ref.W * F);
     return gx && gy ? { x: gx, y: gy } : null;
   }
 
