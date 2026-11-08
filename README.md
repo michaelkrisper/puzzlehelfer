@@ -27,7 +27,13 @@ no photo leaves the device. The app's interface is in German.
   calibration and the exact outline of each gap
 - Guided sweep over a large table with the live camera; photos are stitched
   into one top-down view
-- Gap-by-gap mode for the last plain pieces, with fit/no-fit feedback
+- Step cards for one try at a time: by gap ("Nach Lücke"), by piece ("Nach
+  Teil") or as a search list of motifs to look for ("Suchliste"); full-screen
+  "Am Tisch" mode with big buttons and spoken steps
+- Grid (columns × rows) from the piece count, corrected from the seams of the
+  finished part
+- The round survives a reload or a closed tab: photos, analyses and marks
+  are kept on the phone
 - Installable PWA that works offline
 
 ## Usage
@@ -36,9 +42,11 @@ no photo leaves the device. The app's interface is in German.
    pick an image, e.g. from the manufacturer. The app finds the picture
    corners itself; drag them with a finger if needed.
 2. **Piece count** (required, usually printed on the box): tap or type it.
-   Columns × rows follow from count and aspect ratio; rectangular pieces
-   (e.g. 12 × 20 for 240) are recognised from the finished border in the
-   first photo. Correct it with −/+ if needed.
+   Columns × rows follow from count and aspect ratio; the grids that fit the
+   count are offered as chips (240: 12 × 20, 15 × 16, …). Rectangular pieces
+   are recognised from the seams of the finished part in a photo; the
+   reference tab then says so ("12 × 20 statt 14 × 17"). Correct it with −/+
+   or a chip if needed.
 3. Switch to the **Teile** tab at the bottom.
 4. **Photograph pieces:** picture side up, a little apart, straight from
    above. The half-finished puzzle may be in the photo, and it helps a lot:
@@ -82,13 +90,25 @@ neighbours and the three pieces whose outline fits it best, the clearest
 gaps first. The card shows the gap as the photo sees it next to the piece,
 cut from the photo and already turned as it goes in, at the same scale, and
 below where the piece lies on the table (ringed): one try fits one screen,
-without zooming. Try them in turn: **Passt** puts the piece in, **Passt
+without zooming. The gap shows the reference faintly inside its frame, so
+the motif to look for is right there; turns are given in quarter turns. Try them in turn: **Passt** puts the piece in, **Passt
 nicht** rules that piece out at that gap. A piece put in lends its outline
 as the rim of its free neighbours, so a hole fills from its border inward.
 "Nach Teil" switches back to one piece with its places. Every "Passt" / "Passt nicht" is kept on the phone;
 **Versuche exportieren** saves them as JSON (photo name, piece position,
 place, rotation, result) to check and improve the recognition with real
 solutions.
+
+**Suchliste** lists the open places next to the finished part that no piece
+fills for sure, also those the app has no suggestion for: each as its motif
+from the reference with the knobs and holes its finished neighbours need,
+the most distinctive first. Look for them among the loose pieces; a tap
+opens the gap or the piece to try. **Am Tisch** shows one try full-screen
+with big buttons and keeps the screen on, **Ansage** reads the step out.
+
+A reload or a closed tab keeps the round: photos, their analyses and every
+Passt / Passt nicht come back within seconds. **Abbrechen** stops a photo
+being analysed.
 
 ## How it works
 
