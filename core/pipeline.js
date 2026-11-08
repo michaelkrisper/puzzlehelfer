@@ -302,6 +302,21 @@
     return Math.abs((x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0));
   }
 
+  // Are the places side by side (4-neighbours) in one piece?
+  function connected(cells, cols) {
+    const left = new Set(cells);
+    const todo = [cells[0]];
+    left.delete(cells[0]);
+    while (todo.length) {
+      const c = todo.pop();
+      const next = [c - cols, c + cols];
+      if (c % cols) next.push(c - 1);
+      if ((c + 1) % cols) next.push(c + 1);
+      for (const n of next) if (left.delete(n)) todo.push(n);
+    }
+    return left.size === 0;
+  }
+
   function locateGroups(cv, ref, sf, big, board) {
     const { C, cols, rows } = ref;
     const Hi = board && PH.geom.invertH(board.H);
@@ -323,6 +338,7 @@
       cand.map(() => null),
     );
     const outs = cand.map((x) => x.out);
+    const filled = new Set(board?.filled ?? []);
     const groups = [];
     cand.forEach(({ b }, i) => {
       const f = loc[i];
@@ -344,6 +360,12 @@
         for (let c = 0; c < cols; c++)
           if (PH.feature.pointInPoly((c + 0.5) * C, (r + 0.5) * C, poly)) cells.push(r * cols + c);
       if (!cells.length) return;
+      // Pieces joined by hand cover neighbouring free places. Scattered
+      // places, or ones the finished part already fills, mean a cluster of
+      // loose pieces that feature points mapped as a whole (Cats c3: five
+      // places over five rows, one in the filled frame).
+      if (board && cells.some((c) => filled.has(c))) return;
+      if (!connected(cells, cols)) return;
       const row = Math.floor(f.cell / cols);
       const col = f.cell % cols;
       let psi = 0;
