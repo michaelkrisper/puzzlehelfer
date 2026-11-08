@@ -480,9 +480,20 @@ dialog h3 {
 
 .step-head {
   display: flex;
-  gap: 0.6rem;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.6rem;
   align-items: baseline;
   margin-bottom: 0.5rem;
+}
+
+/* Title and buttons on one line, the counter on its own line below. */
+#step-title {
+  white-space: nowrap;
+}
+
+#step-sub {
+  order: 3;
+  flex-basis: 100%;
 }
 
 /* Gap and piece side by side at the same scale, where the piece lies below:
