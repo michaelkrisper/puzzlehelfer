@@ -632,9 +632,10 @@
       }
       return best;
     };
-    const nearest = (q, maxD) => {
+    const nearest = (q, maxD, only = -1) => {
       let best = null;
       for (let li = 0; li < lines.length; li++) {
+        if (only >= 0 && li !== only) continue;
         const pts = lines[li];
         for (let i = 0; i < pts.length; i++) {
           const d = Math.hypot(pts[i][0] - q[0], pts[i][1] - q[1]);
@@ -652,9 +653,19 @@
         const a = cs[d];
         const b = cs[(d + 1) % 4];
         const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
-        const na = nearest(a, Math.max(tol, FAR_CORNER) * L);
-        const nb = nearest(b, Math.max(tol, FAR_CORNER) * L);
-        if (!na || !nb || na.li !== nb.li) return null;
+        const maxD = Math.max(tol, FAR_CORNER) * L;
+        let na = nearest(a, maxD);
+        let nb = nearest(b, maxD);
+        // Each corner nearest to another outline (the neighbour apart from
+        // the next piece in the mask): the one both lie close to.
+        if (na && nb && na.li !== nb.li) {
+          const both = [na.li, nb.li]
+            .map((li) => [nearest(a, maxD, li), nearest(b, maxD, li)])
+            .filter(([p, q]) => p && q)
+            .sort(([p, q], [u, v]) => Math.max(p.d, q.d) - Math.max(u.d, v.d));
+          [na, nb] = both[0] ?? [null, null];
+        }
+        if (!na || !nb) return null;
         const pts = lines[na.li];
         const n = pts.length;
         const ia = turnNear(pts, na.i, L);
@@ -755,9 +766,9 @@
   }
 
   // An island (or a joined group) on its own mapping: the main one after
-  // its move S. Places and gaps are sampled in the photo along that mapping,
-  // so no warp of the whole photo is needed per island.
-  function measureIsland(cv, ref, hit, move, blob, bigMask) {
+  // its move S. Places and gaps are sampled in the photo along that mapping;
+  // look (registerBoard) adds the places that show its print.
+  function measureIsland(cv, ref, hit, move, blob, bigMask, look = null) {
     const { C, cols, rows } = ref;
     const w = bigMask.cols;
     const h = bigMask.rows;
@@ -805,6 +816,7 @@
           isFilled[r * cols + c] = 1;
           filled.push(r * cols + c);
         }
+    look?.(view, range, isFilled, filled, frac);
     let out = null;
     if (filled.length) {
       // Its grid follows fewer seams than the main part's.
@@ -819,7 +831,8 @@
   // The large areas split where they only touch (narrow contacts): an
   // island laid against the border is a blob of its own, with a mapping of
   // its own. side: piece side in photo pixels. Returns parts {contour, area
-  // (pixels), bbox} and their label image (part i + 1, 0 none), or null.
+  // (pixels), bbox} and their label images (part i + 1, 0 none): lab as
+  // flooded from the cores, full grown back over the whole area; or null.
   function splitAtNecks(cv, bigMask, side) {
     const w = bigMask.cols;
     const h = bigMask.rows;
@@ -852,13 +865,72 @@
       }
     }
     markers.delete();
+    // The flooding gives the table the band along the outline that lies
+    // nearer to it than to a core, and thin knobs: grown back from the parts
+    // through the area for their outlines, else an island's outline runs
+    // inside its pieces and cuts off its knobs (and a ring of it stays in the
+    // main part's mask).
+    const full = lab.slice();
+    const queue = new Int32Array(w * h);
+    let qt = 0;
+    for (let i = 0; i < w * h; i++) if (full[i]) queue[qt++] = i;
+    for (let qh = 0; qh < qt; qh++) {
+      const i = queue[qh];
+      const x = i % w;
+      for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i - w, i + w]) {
+        if (j < 0 || j >= w * h || full[j] || !bm[j]) continue;
+        full[j] = full[i];
+        queue[qt++] = j;
+      }
+    }
+    // Fragments under half a piece (cut off where dark print reads as table)
+    // join the part they share the longest border with: else the places of
+    // an island beyond such a cut lie outside its outline.
+    const minPart = 0.5 * side * side;
+    const shared = new Map();
+    for (let i = 0; i < w * h; i++) {
+      const a = full[i];
+      if (!a) continue;
+      for (const j of [i % w < w - 1 ? i + 1 : -1, i + w < w * h ? i + w : -1]) {
+        const b = j >= 0 ? full[j] : 0;
+        if (!b || b === a) continue;
+        const key = Math.min(a, b) * 256 + Math.max(a, b);
+        shared.set(key, (shared.get(key) ?? 0) + 1);
+      }
+    }
+    const root = Int32Array.from({ length: n + 1 }, (_, v) => v);
+    const find = (v) => (root[v] === v ? v : find(root[v]));
+    let merged = false;
+    for (let pass = 0; pass < 3; pass++) {
+      for (let v = 1; v < n; v++) {
+        if (!count[v] || count[v] >= minPart || root[v] !== v) continue;
+        let best = 0;
+        let bestN = 0;
+        for (const [key, s] of shared) {
+          const u = key >> 8 === v ? key & 255 : (key & 255) === v ? key >> 8 : 0;
+          if (u && s > bestN && find(u) !== v && count[find(u)] >= minPart) {
+            best = find(u);
+            bestN = s;
+          }
+        }
+        if (!best) continue;
+        root[v] = best;
+        count[best] += count[v];
+        merged = true;
+      }
+    }
+    if (merged)
+      for (let i = 0; i < w * h; i++) {
+        if (lab[i]) lab[i] = find(lab[i]);
+        if (full[i]) full[i] = find(full[i]);
+      }
     const parts = [];
     const keep = new Uint8Array(n + 1);
     const one = cv.Mat.zeros(h, w, cv.CV_8UC1);
     for (let v = 1; v < n; v++) {
       if (count[v] < 0.5 * side * side) continue;
       const d = one.data;
-      for (let i = 0; i < w * h; i++) d[i] = lab[i] === v ? 255 : 0;
+      for (let i = 0; i < w * h; i++) d[i] = full[i] === v ? 255 : 0;
       const cs = new cv.MatVector();
       const hier = new cv.Mat();
       cv.findContours(one, cs, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
@@ -881,12 +953,15 @@
       parts.push({ contour: best.pts, area: count[v], bbox: best.bbox });
     }
     one.delete();
-    for (let i = 0; i < w * h; i++) lab[i] = keep[lab[i]];
-    return { parts, lab };
+    for (let i = 0; i < w * h; i++) {
+      lab[i] = keep[lab[i]];
+      full[i] = keep[full[i]];
+    }
+    return { parts, lab, full };
   }
 
-  // Parts that part v (split.lab) touches, as part indices: it was split off
-  // a larger area there.
+  // Parts that part v (split.full) touches, as part indices: it was split
+  // off a larger area there.
   function touching(split, v, contour, bigMask) {
     const w = bigMask.cols;
     const h = bigMask.rows;
@@ -899,7 +974,7 @@
           const yy = y + dy;
           if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
           const o = yy * w + xx;
-          if (bm[o] && split.lab[o] && split.lab[o] !== v) out.add(split.lab[o] - 1);
+          if (bm[o] && split.full[o] && split.full[o] !== v) out.add(split.full[o] - 1);
         }
     return out;
   }
@@ -950,6 +1025,19 @@
     const lab = PH.segment.rgbaToLab(sw.data, ref.W * ref.H);
     sw.delete();
     const rg = grayOf(ref.rgba.data, W * ref.H);
+    // Does photo g (grey, warped onto the reference) show the print of place
+    // c/r, f the share of its middle the mask shows?
+    const looksLike = (g, c, r, f) =>
+      // Half covered: the middle alone must match clearly where the place as
+      // a whole does not (a dark piece cut by the grid 0.94, free places with
+      // knobs reaching in at most 0.78; Cats).
+      (f > 0.25 && (cellNcc(g, rg, W, c, r, C) > 0.6 || nccNear(g, rg, W, c, r, C) > 0.85)) ||
+      // Dark blue pieces pass as black mat in the mask. Their print still
+      // matches in the middle of the place, where the knobs of neighbours
+      // around a free place do not reach; small shifts allowed, the photo
+      // follows the feature points only roughly at its far end (measured on
+      // dark pieces 0.58–0.88, on free places at most 0.46).
+      (f <= 0.25 && nccNear(g, rg, W, c, r, C) > 0.55);
     const filled = [];
     const isFilled = new Uint8Array(cols * rows);
     const looks = [];
@@ -973,16 +1061,7 @@
         if (f > 0.5) {
           isFilled[r * cols + c] = 1;
           filled.push(r * cols + c);
-        } else if (
-          (f > 0.25 && cellNcc(sg, rg, W, c, r, C) > 0.6) ||
-          // Dark blue pieces pass as black mat in the mask. Their print still
-          // matches in the middle of the place, where the knobs of neighbours
-          // around a free place do not reach; small shifts allowed, the photo
-          // follows the feature points only roughly at its far end (measured
-          // on dark pieces 0.58–0.88, on free places at most 0.46).
-          (f <= 0.25 && nccNear(sg, rg, W, c, r, C) > 0.55)
-        )
-          looks.push(r * cols + c);
+        } else if (looksLike(sg, c, r, f)) looks.push(r * cols + c);
       }
     }
     // Colour fit photo → reference over blocks of occupied places.
@@ -1008,7 +1087,8 @@
     // brown. Chroma off by more than LOOK_DC after the colour fit over the
     // places the mask shows.
     const col = colorOver((cell) => isFilled[cell]);
-    const tinted = (cell) => {
+    // L: Lab of the warped photo from row y0 on.
+    const tinted = (cell, L = lab, y0 = 0) => {
       if (!col) return false;
       const r = Math.floor(cell / cols);
       const c = cell % cols;
@@ -1017,9 +1097,9 @@
       let n = 0;
       for (let y = Math.round((r + 0.3) * C); y < (r + 0.7) * C; y += 2) {
         for (let x = Math.round((c + 0.3) * C); x < (c + 0.7) * C; x += 2) {
-          const o = (y * W + x) * 3;
-          da += lab[o + 1] * col[1][0] + col[1][1] - ref.lab[o + 1];
-          db += lab[o + 2] * col[2][0] + col[2][1] - ref.lab[o + 2];
+          const o = ((y - y0) * W + x) * 3;
+          da += L[o + 1] * col[1][0] + col[1][1] - ref.lab[o + 1];
+          db += L[o + 2] * col[2][0] + col[2][1] - ref.lab[o + 2];
           n++;
         }
       }
@@ -1027,26 +1107,72 @@
     };
     // By the print alone only within the finished part (two filled sides,
     // growing inward): on a wooden table loose pieces match some place by
-    // chance.
-    const alike = looks.filter((cell) => !tinted(cell));
-    for (let grown = true; grown; ) {
-      grown = false;
-      for (const cell of alike) {
-        if (isFilled[cell]) continue;
-        const r = Math.floor(cell / cols);
-        const c = cell % cols;
-        const n = PH.match.DIRS.filter(([dx, dy]) => {
-          const rr = r + dy;
-          const cc = c + dx;
-          return rr >= 0 && cc >= 0 && rr < rows && cc < cols && isFilled[rr * cols + cc];
-        }).length;
-        if (n >= 2) {
-          isFilled[cell] = 1;
-          filled.push(cell);
-          grown = true;
+    // chance. A side whose place looks alike as well counts once one is
+    // filled: a run of dark pieces along the frame has a single filled side
+    // at each end (Cats: three in the right column).
+    const grow = (alike, own, cells) => {
+      const isAlike = new Uint8Array(cols * rows);
+      for (const cell of alike) isAlike[cell] = 1;
+      for (let grown = true; grown; ) {
+        grown = false;
+        for (const cell of alike) {
+          if (own[cell]) continue;
+          const r = Math.floor(cell / cols);
+          const c = cell % cols;
+          let n = 0;
+          let m = 0;
+          for (const [dx, dy] of PH.match.DIRS) {
+            const rr = r + dy;
+            const cc = c + dx;
+            if (rr < 0 || cc < 0 || rr >= rows || cc >= cols) continue;
+            if (own[rr * cols + cc]) n++;
+            else if (isAlike[rr * cols + cc]) m++;
+          }
+          if (n >= 2 || (n && n + m >= 2)) {
+            own[cell] = 1;
+            cells.push(cell);
+            grown = true;
+          }
         }
       }
-    }
+    };
+    grow(
+      looks.filter((cell) => !tinted(cell)),
+      isFilled,
+      filled,
+    );
+    // Islands the same way, under their own mapping (dark fur there as well;
+    // Cats: 31 of 186 island places missed by the mask). Their grid misses
+    // the cuts more: a place half covered must match in its middle too, not
+    // only through the knobs reaching in (Cats: free places 0.70 overall,
+    // 0.37–0.41 in the middle).
+    const lookIsland = (view, [r0, r1, c0, c1], own, cells, frac) => {
+      const iw = warpToRef(cv, sceneMat, view, ref, cv.INTER_LINEAR);
+      const px = Uint8Array.from(iw.data);
+      iw.delete();
+      const g = grayOf(px, W * ref.H);
+      // Lab only of the rows a place's colour is checked on.
+      const tintedAt = (r, c) => {
+        const y0 = Math.round((r + 0.3) * C);
+        const y1 = Math.ceil((r + 0.7) * C);
+        return tinted(
+          r * cols + c,
+          PH.segment.rgbaToLab(px.subarray(y0 * W * 4, y1 * W * 4), (y1 - y0) * W),
+          y0,
+        );
+      };
+      const alike = [];
+      for (let r = r0; r < r1; r++) {
+        for (let c = c0; c < c1; c++) {
+          const cell = r * cols + c;
+          if (own[cell] || isFilled[cell]) continue;
+          const f = frac((c + 0.3) * C, (r + 0.3) * C, (c + 0.7) * C, (r + 0.7) * C, true);
+          const like = looksLike(g, c, r, f) && (f <= 0.25 || nccNear(g, rg, W, c, r, C) > 0.55);
+          if (like && !tintedAt(r, c)) alike.push(cell);
+        }
+      }
+      grow(alike, own, cells);
+    };
     if (filled.length < 2 && !moves.length) {
       mainMask.delete();
       return null;
@@ -1093,7 +1219,7 @@
     const islands = [];
     const owner = new Map();
     for (const mv of moves) {
-      const it = measureIsland(cv, ref, hit, mv, blobs[mv.blob], bigMask);
+      const it = measureIsland(cv, ref, hit, mv, blobs[mv.blob], bigMask, lookIsland);
       if (!it) continue;
       // A single piece counts only near its place: else it is a loose piece
       // whose points happen to agree.
