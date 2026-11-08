@@ -275,8 +275,9 @@ function remapMarks(sceneId, centers) {
 
 // ---------- Images ----------
 // Some browsers cannot read every image through createImageBitmap; the
-// <img> element is the second way. Formats the browser cannot open at all
-// (HEIC in Chrome) end in an error with a readable message.
+// <img> element is the second way. HEIC in Chrome goes through the video
+// decoder (core/heic.js); formats the browser cannot open at all end in an
+// error with a readable message.
 async function bitmapOf(blob) {
   try {
     return await createImageBitmap(blob);
@@ -289,7 +290,15 @@ async function bitmapOf(blob) {
       return await createImageBitmap(img);
     } catch {
       const kind = blob.type || blob.name?.split('.').pop() || 'unbekannt';
-      const heic = /hei[cf]/i.test(kind) || /\.hei[cf]$/i.test(blob.name ?? '');
+      const head = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+      const heic = PH.heic.isHeif(head) || /hei[cf]/i.test(kind) || /\.hei[cf]$/i.test(blob.name ?? '');
+      if (heic) {
+        try {
+          return await PH.heic.decode(blob);
+        } catch (err) {
+          console.warn(err);
+        }
+      }
       throw new Error(
         heic
           ? 'HEIC-Fotos (vom iPhone) kann dieser Browser nicht öffnen. Als JPEG speichern oder direkt mit der App fotografieren.'

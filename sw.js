@@ -25,6 +25,7 @@ const FILES = [
   'core/feature.js',
   'core/stitch.js',
   'core/track.js',
+  'core/heic.js',
   'core/pipeline.js',
   'vendor/opencv.js',
   'manifest.webmanifest',
