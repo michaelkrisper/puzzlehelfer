@@ -3,6 +3,8 @@
 const { gridFor, gridChoices, gridFromBorder, borderCost, applyH, invertH } = PH.geom;
 const REF_MAX = 2400;
 const SCENE_MAX = 4000;
+// Pieces of 90 px still need no more than this; half the memory of 4000.
+const SCENE_MAX_LOW = 3000;
 const COUNTS = [100, 200, 300, 500, 1000, 1500, 2000];
 // Same as VERSION in sw.js; CI stamps both with the release tag on deploy.
 const APP_VERSION = 'v0.5.5';
@@ -299,8 +301,21 @@ async function bitmapOf(blob) {
   }
 }
 
+// One photo decoded at a time: a 12 MP bitmap is 48 MB, and thumbnails were
+// decoded while the next photo was decoded for the worker.
+let decoding = Promise.resolve();
+function oneAtATime(f) {
+  const p = decoding.then(f);
+  decoding = p.catch(() => {});
+  return p;
+}
+
 // pixels: false for a view only (no ImageData).
-async function decode(blob, max, pixels = true) {
+function decode(blob, max, pixels = true) {
+  return oneAtATime(() => decodeNow(blob, max, pixels));
+}
+
+async function decodeNow(blob, max, pixels) {
   const bmp = await bitmapOf(blob);
   const f = Math.min(1, max / Math.max(bmp.width, bmp.height));
   const w = Math.round(bmp.width * f);
@@ -1234,32 +1249,31 @@ function newScene(id, file, name, next) {
 
 // Small copies for the row of photos, one after the other: an <img> of the
 // file would hold the whole decoded photo (48 MB at 12 MP) in memory.
-let thumbs = Promise.resolve();
 function makeThumb(s) {
-  thumbs = thumbs
-    .then(async () => {
-      const bmp = await bitmapOf(s.file).catch(() => null);
-      if (!bmp) return;
-      // Covers .thumb (84 × 64 px in style.css).
-      const c = document.createElement('canvas');
-      const dpr = Math.min(3, window.devicePixelRatio || 1);
-      c.width = Math.round(84 * dpr);
-      c.height = Math.round(64 * dpr);
-      const k = Math.max(c.width / bmp.width, c.height / bmp.height);
-      const g = c.getContext('2d');
-      g.imageSmoothingQuality = 'high';
-      g.drawImage(
-        bmp,
-        (c.width - bmp.width * k) / 2,
-        (c.height - bmp.height * k) / 2,
-        bmp.width * k,
-        bmp.height * k,
-      );
-      bmp.close();
-      s.thumb = c;
-      if (state.scenes.includes(s)) renderThumbs();
-    })
-    .catch((err) => console.warn(err));
+  oneAtATime(() => thumbOf(s)).catch((err) => console.warn(err));
+}
+
+async function thumbOf(s) {
+  const bmp = await bitmapOf(s.file).catch(() => null);
+  if (!bmp) return;
+  // Covers .thumb (84 × 64 px in style.css).
+  const c = document.createElement('canvas');
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  c.width = Math.round(84 * dpr);
+  c.height = Math.round(64 * dpr);
+  const k = Math.max(c.width / bmp.width, c.height / bmp.height);
+  const g = c.getContext('2d');
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(
+    bmp,
+    (c.width - bmp.width * k) / 2,
+    (c.height - bmp.height * k) / 2,
+    bmp.width * k,
+    bmp.height * k,
+  );
+  bmp.close();
+  s.thumb = c;
+  if (state.scenes.includes(s)) renderThumbs();
 }
 
 // Which file the worker's stored analysis of a photo was made of, by which
@@ -1403,16 +1417,41 @@ async function sceneResult(s, job) {
       return r;
     }
   }
-  const image = await sceneImage(s);
-  if (!image || gone()) return null;
-  s.gen = refGen;
-  return call(
-    'scene',
-    { sceneId: s.id, image, next: s.next ?? [], key: analysisKey(s) },
-    [image.data.buffer],
-    (m) => progressed(job, m),
-  );
+  analysing(+1);
+  try {
+    const image = await sceneImage(s);
+    if (!image || gone()) return null;
+    s.gen = refGen;
+    return await call(
+      'scene',
+      { sceneId: s.id, image, next: s.next ?? [], key: analysisKey(s) },
+      [image.data.buffer],
+      (m) => progressed(job, m),
+    );
+  } finally {
+    analysing(-1);
+  }
 }
+
+// Safari ends the page without a word when memory runs out (iPhone 12 mini)
+// and loads it again, which restores the round and analyses the same photo
+// again. A mark set while a photo is analysed and cleared when the page is
+// left tells that: from then on this device analyses photos smaller.
+const crashed = localStorage.getItem('ph-busy') === '1';
+if (crashed) localStorage.setItem('ph-low-mem', '1');
+const LOW_MEM = localStorage.getItem('ph-low-mem') === '1';
+localStorage.removeItem('ph-busy');
+let busyScenes = 0;
+function analysing(d) {
+  busyScenes += d;
+  markBusy();
+}
+function markBusy() {
+  if (busyScenes > 0 && document.visibilityState === 'visible') localStorage.setItem('ph-busy', '1');
+  else localStorage.removeItem('ph-busy');
+}
+document.addEventListener('visibilitychange', markBusy);
+window.addEventListener('pagehide', () => localStorage.removeItem('ph-busy'));
 
 // Pixels of the photo for the worker, only for this call (a new analysis,
 // new grid, decodes again); the view of it is kept. A photo the browser
@@ -1420,7 +1459,7 @@ async function sceneResult(s, job) {
 async function sceneImage(s, pixels = true) {
   let d;
   try {
-    d = await decode(s.file, pixels ? SCENE_MAX : VIEW_MAX, pixels);
+    d = await decode(s.file, pixels ? (LOW_MEM ? SCENE_MAX_LOW : SCENE_MAX) : VIEW_MAX, pixels);
   } catch (err) {
     console.warn(err);
     await removeScene(s.id);
@@ -3756,6 +3795,10 @@ $('map-box').addEventListener('toggle', () => {
       showTab('step-scene');
       // The photos and marks of the round before the reload.
       await restoreRound();
+      if (crashed)
+        setStatus(
+          'Die App wurde beim Auswerten eines Fotos beendet (zu wenig Speicher). Fotos werden jetzt kleiner ausgewertet.',
+        );
     } else await clearRound();
   } catch (err) {
     console.warn(err);
