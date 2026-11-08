@@ -106,12 +106,14 @@ const check = (cond, what) => {
 
 try {
   let target;
-  for (let i = 0; i < 50 && !target; i++) {
+  // A busy CI runner can take well over 10 s to start Chrome.
+  for (let i = 0; i < 150 && !target; i++) {
     await wait(200);
     target = await fetch(`http://127.0.0.1:${cdpPort}/json/new?about:blank`, { method: 'PUT' })
       .then((r) => r.json())
       .catch(() => null);
   }
+  if (!target) throw new Error('Chrome did not open its DevTools port within 30 s');
   ws = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((r) => ws.addEventListener('open', r));
   ws.addEventListener('message', (e) => {
