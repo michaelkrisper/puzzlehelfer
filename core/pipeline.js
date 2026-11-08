@@ -493,7 +493,7 @@
     // Two pieces touching are still below the size of a large area: split
     // too large outlines if every part has a better piece shape.
     for (const p of segPieces) {
-      const parts = !p.touches && p.area > 1.3 * A ? PH.segment.splitBlob(cv, p.contour, A) : null;
+      const parts = !p.touches && p.area > 1.3 * A ? PH.segment.splitBlob(cv, p.contour, A, gray) : null;
       if (parts?.length > 1 && parts.every((q) => q.area > 0.4 * A)) {
         const whole = Math.max(quality(p.contour), p.alt ? quality(p.alt) : 0);
         if (parts.every((q) => quality(q.contour) >= whole)) {
@@ -509,7 +509,7 @@
       if (groups.some((g) => g.big === b) || onBoard(simplify(b.contour, 3))) continue;
       // A huge area is a finished part that could not be placed, not a
       // cluster of loose pieces: splitting it gives only fake pieces.
-      const parts = b.area < 25 * A ? (PH.segment.splitBlob(cv, b.contour, A) ?? [b]) : [b];
+      const parts = b.area < 25 * A ? (PH.segment.splitBlob(cv, b.contour, A, gray) ?? [b]) : [b];
       for (const q of parts) {
         if (q.area > 0.4 * A && q.area < 2.2 * A) {
           const touches = q.contour.some(([x, y]) => x <= 1 || y <= 1 || x >= w - 2 || y >= h - 2);

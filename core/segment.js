@@ -549,12 +549,73 @@
     raw.data.set(rd);
   }
 
+  // Where two pieces meet, their cardboard edges draw a thin dark line (the
+  // shadow between them, or a hairline of table between white pieces). Lines
+  // of a blob (mask: the blob in its box at x0, y0 of the photo), widened by
+  // 2 px; only inside, the dark rim along the outline is everywhere.
+  function seamLines(cv, mask, gray, x0, y0, side) {
+    const w = mask.cols;
+    const h = mask.rows;
+    // Closing over about 0.12 piece sides: wider than the line, narrower than
+    // the print areas.
+    const k = Math.min(11, Math.max(5, 2 * Math.round(0.06 * side - 0.5) + 1));
+    const rim = Math.max(3, 0.1 * side);
+    const rx0 = Math.max(0, x0 - k);
+    const ry0 = Math.max(0, y0 - k);
+    const rw = Math.min(gray.cols, x0 + w + k) - rx0;
+    const rh = Math.min(gray.rows, y0 + h + k) - ry0;
+    const cl = new cv.Mat();
+    const d0 = new cv.Mat();
+    const lines = cv.Mat.zeros(h, w, cv.CV_8UC1);
+    const cl8 = new cv.Mat();
+    const st = new cv.Mat();
+    const ce = new cv.Mat();
+    const ker = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(k, k));
+    const k5 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+    const roi = gray.roi(new cv.Rect(rx0, ry0, rw, rh));
+    const sub = new cv.Mat();
+    roi.copyTo(sub);
+    roi.delete();
+    cv.morphologyEx(sub, cl, cv.MORPH_CLOSE, ker);
+    cv.distanceTransform(mask, d0, cv.DIST_L2, 3);
+    const gv = sub.data;
+    const CL = cl.data;
+    const D0 = d0.data32F;
+    const M = mask.data;
+    const Ld = lines.data;
+    // Clearly darker than the closing around them, also in proportion (dark
+    // fur is dark throughout).
+    for (let y = 0; y < h; y++) {
+      const gy = y + y0 - ry0;
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        const gx = x + x0 - rx0;
+        if (!M[i] || D0[i] <= rim || gy < 0 || gy >= rh || gx < 0 || gx >= rw) continue;
+        const c = CL[gy * rw + gx];
+        const b = c - gv[gy * rw + gx];
+        if (b > 35 && b > 0.25 * c) Ld[i] = 255;
+      }
+    }
+    // Lines of at least 0.2 piece sides, no specks.
+    const nl = cv.connectedComponentsWithStats(lines, cl8, st, ce, 8, cv.CV_32S);
+    const S = st.data32S;
+    const keep = new Uint8Array(nl);
+    for (let j = 1; j < nl; j++) keep[j] = Math.max(S[j * 5 + 2], S[j * 5 + 3]) >= 0.2 * side ? 255 : 0;
+    const LB = cl8.data32S;
+    const L2 = lines.data;
+    for (let i = 0; i < w * h; i++) L2[i] = keep[LB[i]];
+    cv.dilate(lines, lines, k5);
+    const out = Uint8Array.from(lines.data);
+    for (const m of [cl, d0, lines, cl8, st, ce, ker, k5, sub]) m.delete();
+    return out;
+  }
+
   // Pieces lying against each other touch only at narrow spots. Each piece
   // body is a maximum of the distance to the blob edge (knobs are too thin
   // for one); from these markers the blob is flooded from high to low
   // distance, so the borders fall on the narrow contacts. Result: outlines
   // of the parts, or null if the blob holds only one body.
-  function splitBlob(cv, contour, pieceArea) {
+  function splitBlob(cv, contour, pieceArea, gray = null) {
     const side = Math.sqrt(pieceArea);
     let x0 = Infinity;
     let y0 = Infinity;
@@ -592,6 +653,7 @@
     for (let i = 0; i < D.length; i++) if (D[i] >= 0.22 * side && D[i] >= dl[i] - 0.01) pd[i] = 255;
     const n = cv.connectedComponents(peaks, lab, 8, cv.CV_32S) - 1;
     const L = Int32Array.from(lab.data32S);
+    const seam = n >= 2 && gray ? seamLines(cv, mask, gray, x0, y0, side) : null;
     for (const m of [mask, dist, ker, dil, peaks, lab]) m.delete();
     if (n < 2) return null;
     // Each pixel, by decreasing distance, joins its deepest labelled
@@ -620,25 +682,40 @@
     // A piece with two opposite holes has a waist and two maxima: parts below
     // 0.7 piece areas join the neighbour they share the longest border with
     // (two halves of a piece share the waist, two pieces only a contact).
+    // Not a part of about half a piece or more whose border is a contact:
+    // narrow (a waist is at least about 0.35 piece sides wide), or mostly
+    // along a seam line (a waist crosses print).
     const area = new Float64Array(n + 1);
     for (let i = 0; i < L.length; i++) area[L[i]]++;
+    const apart = new Uint8Array(n + 1);
     for (;;) {
       let k = 0;
       for (let j = 1; j <= n; j++)
-        if (area[j] > 0 && area[j] < 0.7 * pieceArea && (!k || area[j] < area[k])) k = j;
+        if (area[j] > 0 && !apart[j] && area[j] < 0.7 * pieceArea && (!k || area[j] < area[k])) k = j;
       if (!k) break;
       const shared = new Map();
+      const onSeam = new Map();
+      const deep = new Map();
       for (let i = 0; i < L.length; i++) {
         if (L[i] !== k) continue;
         for (const j of [i + 1, i - 1, i + w, i - w]) {
           const o = L[j];
-          if (o > 0 && o !== k) shared.set(o, (shared.get(o) ?? 0) + 1);
+          if (!(o > 0) || o === k) continue;
+          shared.set(o, (shared.get(o) ?? 0) + 1);
+          if (seam && (seam[i] || seam[j])) onSeam.set(o, (onSeam.get(o) ?? 0) + 1);
+          if (D[i] > (deep.get(o) ?? 0)) deep.set(o, D[i]);
         }
       }
       let into = 0;
       for (const [o, c] of shared) if (!into || c > shared.get(into)) into = o;
       if (!into) {
         area[k] = 0;
+        continue;
+      }
+      const neck = 2 * deep.get(into);
+      const onLine = (onSeam.get(into) ?? 0) / shared.get(into);
+      if (area[k] >= 0.45 * pieceArea && (neck < 0.25 * side || onLine >= 0.5)) {
+        apart[k] = 1;
         continue;
       }
       for (let i = 0; i < L.length; i++) if (L[i] === k) L[i] = into;
