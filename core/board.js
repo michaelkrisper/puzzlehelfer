@@ -767,8 +767,10 @@
 
   // An island (or a joined group) on its own mapping: the main one after
   // its move S. Places and gaps are sampled in the photo along that mapping;
-  // look (registerBoard) adds the places that show its print.
-  function measureIsland(cv, ref, hit, move, blob, bigMask, look = null) {
+  // look (registerBoard) adds the places that show its print. cut: parts
+  // split off at narrow contacts that may belong to it, {lab (part + 1 per
+  // photo pixel), parts: [{i, contour}]}.
+  function measureIsland(cv, ref, hit, move, blob, bigMask, look = null, cut = null) {
     const { C, cols, rows } = ref;
     const w = bigMask.cols;
     const h = bigMask.rows;
@@ -777,7 +779,7 @@
     // Its outline filled, without the empty places inside it.
     const m = cv.Mat.zeros(h, w, cv.CV_8UC1);
     PH.segment.drawPoly(cv, m, blob.contour);
-    const md = m.data;
+    let md = m.data;
     const bm = bigMask.data;
     for (let i = 0; i < md.length; i++) if (!bm[i]) md[i] = 0;
     const inside = (x, y) => {
@@ -817,6 +819,38 @@
           filled.push(r * cols + c);
         }
     look?.(view, range, isFilled, filled, frac);
+    // look may have grown the WASM memory.
+    md = m.data;
+    // A piece cut off at a narrow contact whose place the print claimed
+    // (look): its outline is the island's, else the gaps next to it have
+    // no rim.
+    const add = [];
+    for (const cell of cut ? filled : []) {
+      const r = Math.floor(cell / cols);
+      const c = cell % cols;
+      const votes = new Map();
+      for (let j = 0; j < 6; j++)
+        for (let i = 0; i < 6; i++) {
+          const [sx, sy] = toScene(
+            view,
+            (c + 0.3 + (0.4 * (i + 0.5)) / 6) * C,
+            (r + 0.3 + (0.4 * (j + 0.5)) / 6) * C,
+          );
+          const xi = Math.round(sx);
+          const yi = Math.round(sy);
+          if (xi < 0 || yi < 0 || xi >= w || yi >= h || md[yi * w + xi]) continue;
+          const v = cut.lab[yi * w + xi] - 1;
+          votes.set(v, (votes.get(v) ?? 0) + 1);
+        }
+      const part = cut.parts.find((p) => (votes.get(p.i) ?? 0) > 18);
+      if (part && !add.includes(part)) add.push(part);
+    }
+    if (add.length) {
+      for (const p of add) PH.segment.drawPoly(cv, m, p.contour);
+      md = m.data;
+      const bd = bigMask.data;
+      for (let i = 0; i < md.length; i++) if (!bd[i]) md[i] = 0;
+    }
     let out = null;
     if (filled.length) {
       // Its grid follows fewer seams than the main part's.
@@ -1098,8 +1132,11 @@
       for (let y = Math.round((r + 0.3) * C); y < (r + 0.7) * C; y += 2) {
         for (let x = Math.round((c + 0.3) * C); x < (c + 0.7) * C; x += 2) {
           const o = ((y - y0) * W + x) * 3;
-          da += L[o + 1] * col[1][0] + col[1][1] - ref.lab[o + 1];
-          db += L[o + 2] * col[2][0] + col[2][1] - ref.lab[o + 2];
+          // The reference from row 0 (islands: compared against its top rows,
+          // dark island places read as tinted by 22–35).
+          const q = (y * W + x) * 3;
+          da += L[o + 1] * col[1][0] + col[1][1] - ref.lab[q + 1];
+          db += L[o + 2] * col[2][0] + col[2][1] - ref.lab[q + 2];
           n++;
         }
       }
@@ -1109,8 +1146,9 @@
     // growing inward): on a wooden table loose pieces match some place by
     // chance. A side whose place looks alike as well counts once one is
     // filled: a run of dark pieces along the frame has a single filled side
-    // at each end (Cats: three in the right column).
-    const grow = (alike, own, cells) => {
+    // at each end (Cats: three in the right column). sure: places whose
+    // print matches so clearly that one filled side suffices.
+    const grow = (alike, own, cells, sure = null) => {
       const isAlike = new Uint8Array(cols * rows);
       for (const cell of alike) isAlike[cell] = 1;
       for (let grown = true; grown; ) {
@@ -1128,7 +1166,7 @@
             if (own[rr * cols + cc]) n++;
             else if (isAlike[rr * cols + cc]) m++;
           }
-          if (n >= 2 || (n && n + m >= 2)) {
+          if (n >= 2 || (n && (n + m >= 2 || sure?.has(cell)))) {
             own[cell] = 1;
             cells.push(cell);
             grown = true;
@@ -1162,16 +1200,24 @@
         );
       };
       const alike = [];
+      const sure = new Set();
       for (let r = r0; r < r1; r++) {
         for (let c = c0; c < c1; c++) {
           const cell = r * cols + c;
           if (own[cell] || isFilled[cell]) continue;
           const f = frac((c + 0.3) * C, (r + 0.3) * C, (c + 0.7) * C, (r + 0.7) * C, true);
           const like = looksLike(g, c, r, f) && (f <= 0.25 || nccNear(g, rg, W, c, r, C) > 0.55);
-          if (like && !tintedAt(r, c)) alike.push(cell);
+          if (like && !tintedAt(r, c)) {
+            alike.push(cell);
+            // A piece cut off the island's outline at a narrow contact
+            // (splitAtNecks) has a single filled side but its print in
+            // the middle (Cats: 0.76–0.95; free places next to islands at
+            // most 0.70).
+            if (nccNear(g, rg, W, c, r, C) > 0.75) sure.add(cell);
+          }
         }
       }
-      grow(alike, own, cells);
+      grow(alike, own, cells, sure);
     };
     if (filled.length < 2 && !moves.length) {
       mainMask.delete();
@@ -1219,7 +1265,14 @@
     const islands = [];
     const owner = new Map();
     for (const mv of moves) {
-      const it = measureIsland(cv, ref, hit, mv, blobs[mv.blob], bigMask, lookIsland);
+      // Small parts it touches that lie on no mapping of their own.
+      const cut = split && {
+        lab: split.full,
+        parts: [...touching(split, mv.blob + 1, blobs[mv.blob].contour, bigMask)]
+          .filter((i) => !placed(i) && blobs[i].area < 2.6 * cell)
+          .map((i) => ({ i, contour: blobs[i].contour })),
+      };
+      const it = measureIsland(cv, ref, hit, mv, blobs[mv.blob], bigMask, lookIsland, cut);
       if (!it) continue;
       // A single piece counts only near its place: else it is a loose piece
       // whose points happen to agree.
