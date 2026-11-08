@@ -1,5 +1,8 @@
 # Changelog
 
+This file ends with 0.5.5. Later changes are listed in the
+[GitHub releases](https://github.com/michaelkrisper/puzzlehelfer/releases).
+
 ## 0.5.5 – 2026-11-07
 
 - Percentages closer to the truth: by gap they were too low (Kanagawa: 50 %

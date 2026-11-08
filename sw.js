@@ -1,6 +1,6 @@
 // Precache everything; after that the app needs no network.
-// VERSION is raised by CI on every merge on main (tools/release.mjs),
-// together with APP_VERSION in app.js (shown in the header).
+// VERSION is stamped with the release tag by CI on deploy
+// (tools/stamp-version.mjs), together with APP_VERSION in app.js (shown in the header).
 const VERSION = 'v0.5.5';
 // All apps on michaelkrisper.github.io share one origin and thus one
 // CacheStorage, so the cache name carries the app's prefix and cleanup only
