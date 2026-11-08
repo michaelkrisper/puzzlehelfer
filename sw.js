@@ -4,10 +4,9 @@
 const VERSION = 'v0.5.5';
 // All apps on michaelkrisper.github.io share one origin and thus one
 // CacheStorage, so the cache name carries the app's prefix and cleanup only
-// touches this app's caches (plus the unprefixed 'vN' names used up to v41).
+// touches this app's caches.
 const PREFIX = 'puzzlehelfer-';
 const CACHE = PREFIX + VERSION;
-const LEGACY = /^v\d+$/;
 const FILES = [
   './',
   'index.html',
@@ -50,7 +49,7 @@ self.addEventListener('activate', (e) => {
       .then((keys) =>
         Promise.all(
           keys
-            .filter((k) => (k.startsWith(PREFIX) && k !== CACHE) || LEGACY.test(k))
+            .filter((k) => k.startsWith(PREFIX) && k !== CACHE)
             .map((k) => caches.delete(k)),
         ),
       )
