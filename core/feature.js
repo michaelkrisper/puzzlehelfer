@@ -436,17 +436,64 @@
       const hy = f.s * cx + f.c * cy + f.ty;
       const u = (hx * W) / hi.w;
       const v = (hy * H) / hi.h;
-      const col = Math.floor(u / C);
-      const row = Math.floor(v / C);
-      if (col < 0 || row < 0 || col >= cols || row >= rows) return null;
-      const rot = sh ? ((Math.round((sh.angle + f.angle) / 90) % 4) + 4) % 4 : null;
       // Photo → grid reference (via the high-resolution reference).
       const toRef = (x, y) => [
         ((f.c * x - f.s * y + f.tx) * W) / hi.w,
         ((f.s * x + f.c * y + f.ty) * H) / hi.h,
       ];
-      return { cell: row * cols + col, rot, inliers: f.inliers, angle: f.angle, at: [u, v], toRef };
+      const col = Math.floor(u / C);
+      const row = Math.floor(v / C);
+      let cell = col >= 0 && row >= 0 && col < cols && row < rows ? row * cols + col : null;
+      // A piece covers its own place more than any other, whatever its
+      // knobs; the centre of wrongly found corners lands a place off. Cats
+      // (8 photos, 84 pieces with 10+ points): right place 70 → 78.
+      const poly = sh ? contours[i].map(([x, y]) => toRef(x, y)) : null;
+      if (poly) cell = coveredCell(poly, C, cols, rows) ?? cell;
+      if (cell === null) return null;
+      const rot = sh ? ((Math.round((sh.angle + f.angle) / 90) % 4) + 4) % 4 : null;
+      return { cell, rot, inliers: f.inliers, angle: f.angle, at: [u, v], toRef };
     });
+  }
+
+  // Place whose square the outline (grid reference pixels) covers most, by
+  // scan lines; null if it lies outside the grid.
+  function coveredCell(poly, C, cols, rows) {
+    let y0 = Infinity;
+    let y1 = -Infinity;
+    for (const [, y] of poly) {
+      y0 = Math.min(y0, y);
+      y1 = Math.max(y1, y);
+    }
+    const area = new Map();
+    const dy = C / 16;
+    for (let y = y0 + dy / 2; y < y1; y += dy) {
+      const r = Math.floor(y / C);
+      if (r < 0 || r >= rows) continue;
+      const xs = [];
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const [xi, yi] = poly[i];
+        const [xj, yj] = poly[j];
+        if (yi > y !== yj > y) xs.push(xi + ((y - yi) * (xj - xi)) / (yj - yi));
+      }
+      xs.sort((a, b) => a - b);
+      for (let k = 0; k + 1 < xs.length; k += 2) {
+        const a = Math.max(0, xs[k]);
+        const b = Math.min(cols * C, xs[k + 1]);
+        for (let c = Math.floor(a / C); c * C < b; c++) {
+          const key = r * cols + c;
+          area.set(key, (area.get(key) ?? 0) + Math.min(b, (c + 1) * C) - Math.max(a, c * C));
+        }
+      }
+    }
+    let best = null;
+    let most = 0;
+    for (const [key, a] of area) {
+      if (a > most) {
+        most = a;
+        best = key;
+      }
+    }
+    return best;
   }
 
   // Point pairs reference (ref.hi coordinates) ↔ photo inside a mask, after
