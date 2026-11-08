@@ -168,6 +168,7 @@ function saveRound() {
     gapFocus: state.gapFocus,
     gapMode: state.gapMode,
     gapModeChosen: state.gapModeChosen,
+    searchMode: state.searchMode,
     table: state.table,
     tableChosen: state.tableChosen,
     crop: state.crop,
@@ -227,7 +228,7 @@ function restoreMarks(r, ids) {
   state.focus = ours(r.focus) ? r.focus : null;
   state.gapFocus = r.gapFocus ?? null;
   state.crop = r.crop ?? null;
-  for (const k of ['gapMode', 'gapModeChosen', 'table', 'tableChosen']) state[k] = !!r[k];
+  for (const k of ['gapMode', 'gapModeChosen', 'searchMode', 'table', 'tableChosen']) state[k] = !!r[k];
   // The marks belong to this grid: photos analysed again must not move it.
   if (state.marks.length) state.seamsDone = state.gridAuto = true;
 }
@@ -367,6 +368,10 @@ const state = {
   gapModeChosen: false,
   gapFocus: null, // {cell, alt}
   skippedGaps: new Set(),
+  // Search list: the open places without a sure piece, by their motif;
+  // searchOpen: the place shown bigger.
+  searchMode: false,
+  searchOpen: null,
   // Every "Passt" / "Passt nicht", kept across sessions: real solutions to
   // measure the recognition against (export as JSON).
   attempts: [],
@@ -1712,6 +1717,8 @@ $('new-round').addEventListener('click', async () => {
   state.focus = null;
   state.gapFocus = null;
   state.skippedGaps.clear();
+  state.searchMode = false;
+  state.searchOpen = null;
   state.scenes = [];
   if (run.scene) stopScene(run.scene);
   state.current = null;
@@ -2222,7 +2229,7 @@ function focusedGap() {
 // What the viewer highlights: the piece in hand and the place it is tried
 // at (null: all arrows).
 function focusTarget() {
-  if (state.allArrows) return null;
+  if (state.allArrows || state.searchMode) return null;
   if (state.gapMode) {
     const g = focusedGap();
     const c = g?.cands[Math.min(state.gapFocus.alt, g.cands.length - 1)];
@@ -2239,13 +2246,23 @@ function renderSteps() {
   const gaps = state.result?.gaps ?? [];
   if (!state.gapModeChosen) state.gapMode = gaps.length > 0;
   if (!gaps.length) state.gapMode = false;
-  show('step-mode', gaps.length > 0);
-  $('mode-gap').classList.toggle('primary', state.gapMode);
-  $('mode-piece').classList.toggle('primary', !state.gapMode);
+  const places = searchPlaces();
+  if (!places.length) state.searchMode = false;
+  show('step-mode', gaps.length > 0 || places.length > 0);
+  show('mode-gap', gaps.length > 0);
+  show('mode-search', places.length > 0);
+  $('mode-gap').classList.toggle('primary', state.gapMode && !state.searchMode);
+  $('mode-piece').classList.toggle('primary', !state.gapMode && !state.searchMode);
+  $('mode-search').classList.toggle('primary', state.searchMode);
+  $('step').classList.toggle('search', state.searchMode);
   show('step-removed', !state.gapMode);
-  if (state.gapMode) renderGapStep();
+  if (state.searchMode) renderSearchList(places);
+  else if (state.gapMode) renderGapStep();
   else renderPieceStep();
-  renderPieceList(queue(), state.gapMode ? null : focused());
+  // At the table the card fills the screen: the modes go into it.
+  if (prefs.table && !$('step').hidden) $('step').prepend($('step-mode'));
+  else $('step').before($('step-mode'));
+  renderPieceList(queue(), state.gapMode || state.searchMode ? null : focused());
   drawViewer();
 }
 
@@ -2374,6 +2391,240 @@ function renderGapStep() {
   );
 }
 
+// ---------- Search list ----------
+// The open places next to the finished part that no try fills with
+// confidence (plain areas, pieces in no photo yet, places without a rim or
+// any piece), each as its motif in the reference: what to look for among
+// the loose pieces by eye. The rarest motifs first.
+// From this chance on a place counts as filled with confidence (by the
+// first piece of its gap or a piece whose place it is): about where most
+// tries are right (Kanagawa's gaps: 50 % on average, 19 of 21 right).
+const SURE_FILL = 0.5;
+const SIDES = [
+  [0, -1],
+  [1, 0],
+  [0, 1],
+  [-1, 0],
+]; // top, right, bottom, left: out of the place
+
+// Places of the finished part, of joined groups and of pieces put in.
+function takenCells() {
+  const taken = filledCells();
+  for (const s of state.result.scenes) for (const g of s.groups ?? []) for (const c of g.cells) taken.add(c);
+  return taken;
+}
+
+// p: the best chance of a try there (none: no piece for it). sides: the
+// knob (1) or hole (−1) a piece needs by its finished neighbours, 0
+// straight (the puzzle's border), null not known. Next to a joined group
+// only is not next to the finished part yet.
+function searchPlaces() {
+  const r = state.result;
+  if (!r || !state.refView) return [];
+  const { cols, rows } = state;
+  const filled = filledCells();
+  const taken = takenCells();
+  const best = new Map();
+  const note = (cell, p) => best.set(cell, Math.max(best.get(cell) ?? 0, p ?? 0));
+  for (const g of r.gaps ?? []) note(g.cell, g.cands[0]?.p);
+  for (const x of state.queue ?? []) {
+    for (const a of candsOf(x)) note(a.cell, a.p);
+    if (x.sure) note(x.cell, 1);
+  }
+  const needs = new Map(r.needs ?? []);
+  const out = [];
+  for (const cell of freeCells()) {
+    if (taken.has(cell) || best.get(cell) >= SURE_FILL) continue;
+    const row = Math.floor(cell / cols);
+    const col = cell % cols;
+    const at = SIDES.map(([dx, dy]) => {
+      const [r2, c2] = [row + dy, col + dx];
+      return r2 < 0 || c2 < 0 || r2 >= rows || c2 >= cols ? -1 : r2 * cols + c2;
+    });
+    if (!at.some((c) => filled.has(c))) continue;
+    const sides = at.map((c, d) => (c < 0 ? 0 : (needs.get(`${cell},${d}`) ?? null)));
+    out.push({ cell, row, col, sides, p: best.get(cell) });
+  }
+  return out;
+}
+
+// Colours of every place in the reference: 16 × 16 samples, 6 levels per
+// channel (216 bins). Once per reference.
+const SAMPLES = 256;
+function placeColours() {
+  const rv = state.refView;
+  const N = state.cols * state.rows;
+  if (rv.bins?.length === N * SAMPLES) return rv.bins;
+  const { canvas, C } = rv;
+  const px = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+  const bins = new Uint8Array(N * SAMPLES);
+  const st = C / 16;
+  let k = 0;
+  for (let cell = 0; cell < N; cell++) {
+    const x0 = (cell % state.cols) * C;
+    const y0 = Math.floor(cell / state.cols) * C;
+    for (let j = 0; j < 16; j++) {
+      for (let i = 0; i < 16; i++) {
+        const o = (Math.floor(y0 + (j + 0.5) * st) * canvas.width + Math.floor(x0 + (i + 0.5) * st)) * 4;
+        bins[k++] = ((px[o] * 6) >> 8) * 36 + ((px[o + 1] * 6) >> 8) * 6 + ((px[o + 2] * 6) >> 8);
+      }
+    }
+  }
+  rv.bins = bins;
+  return bins;
+}
+
+// How rare a place's colours are among all places not filled yet (the loose
+// pieces look like those): the mean surprisal of its rarest quarter, so a
+// red bow in a corner counts, and sky or white ground that many pieces
+// share comes last. A little more for each side of known shape: among
+// plain places (Kanagawa's sky: all within about one bit) the clearer
+// outline first.
+function rarity(places, taken) {
+  const bins = placeColours();
+  const hist = new Float64Array(216);
+  let n = 0;
+  for (let c = 0; c < state.cols * state.rows; c++) {
+    if (taken.has(c)) continue;
+    for (let i = c * SAMPLES; i < (c + 1) * SAMPLES; i++) hist[bins[i]]++;
+    n += SAMPLES;
+  }
+  for (const x of places) {
+    const s = Array.from(
+      bins.subarray(x.cell * SAMPLES, (x.cell + 1) * SAMPLES),
+      (b) => -Math.log2(hist[b] / n),
+    );
+    s.sort((a, b) => b - a);
+    x.rare =
+      s.slice(0, SAMPLES / 4).reduce((a, v) => a + v, 0) / (SAMPLES / 4) +
+      0.25 * x.sides.filter((t) => t !== null).length;
+  }
+}
+
+// One side of a piece from a to b (o: out of the place, L: side length):
+// straight, with a knob (t = 1) or a hole (t = −1).
+function sideTo(g, a, b, o, L, t) {
+  if (t) {
+    const P = (u, v) => [
+      a[0] + (b[0] - a[0]) * u + o[0] * L * v * t,
+      a[1] + (b[1] - a[1]) * u + o[1] * L * v * t,
+    ];
+    g.lineTo(...P(0.36, 0));
+    g.bezierCurveTo(...P(0.42, 0), ...P(0.43, 0.06), ...P(0.4, 0.11));
+    g.bezierCurveTo(...P(0.35, 0.2), ...P(0.42, 0.27), ...P(0.5, 0.27));
+    g.bezierCurveTo(...P(0.58, 0.27), ...P(0.65, 0.2), ...P(0.6, 0.11));
+    g.bezierCurveTo(...P(0.57, 0.06), ...P(0.58, 0), ...P(0.64, 0));
+  }
+  g.lineTo(...b);
+}
+
+// The place's motif in the reference with a margin (the knobs carry a bit
+// of the neighbours), around it dimmed: the piece as far as its outline is
+// known, dashed where not.
+function drawSearchTile(cv, { row, col, sides }) {
+  const { view, W, C } = state.refView;
+  const s = view.width / W;
+  const m = 0.3 * C;
+  const k = cv.width / (C + 2 * m);
+  const g = cv.getContext('2d');
+  g.fillStyle = '#0b1016';
+  g.fillRect(0, 0, cv.width, cv.height);
+  const S = (C + 2 * m) * s;
+  g.drawImage(view, (col * C - m) * s, (row * C - m) * s, S, S, 0, 0, cv.width, cv.height);
+  const [a, b] = [m * k, (m + C) * k];
+  const q = [
+    [a, a],
+    [b, a],
+    [b, b],
+    [a, b],
+  ];
+  const side = (d) => sideTo(g, q[d], q[(d + 1) % 4], SIDES[d], C * k, sides[d] ?? 0);
+  g.beginPath();
+  g.rect(0, 0, cv.width, cv.height);
+  g.moveTo(...q[0]);
+  for (let d = 0; d < 4; d++) side(d);
+  g.fillStyle = '#0b101699';
+  g.fill('evenodd');
+  const lw = cv.width / 90;
+  for (let d = 0; d < 4; d++) {
+    g.beginPath();
+    g.moveTo(...q[d]);
+    side(d);
+    g.setLineDash(sides[d] === null ? [lw * 2.5, lw * 2] : []);
+    g.strokeStyle = '#000b';
+    g.lineWidth = lw * 2.2;
+    g.stroke();
+    g.strokeStyle = '#fff';
+    g.lineWidth = lw;
+    g.stroke();
+  }
+  g.setLineDash([]);
+}
+
+function renderSearchList(places) {
+  show('step', true);
+  rarity(places, takenCells());
+  places.sort((a, b) => b.rare - a.rare);
+  $('step-title').textContent = 'Suchliste';
+  $('step-sub').textContent = `${places.length} ${places.length === 1 ? 'Platz' : 'Plätze'}`;
+  const hint = document.createElement('p');
+  hint.className = 'muted';
+  hint.textContent =
+    'Ohne sicheren Vorschlag, seltene Motive zuerst: such sie bei den losen Teilen. Antippen zeigt den Platz.';
+  const box = $('search-list');
+  box.replaceChildren(hint);
+  for (const x of places) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    const open = state.searchOpen === x.cell;
+    b.className = `search-tile${open ? ' open' : ''}`;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 256;
+    drawSearchTile(cv, x);
+    b.append(cv);
+    const t = document.createElement('span');
+    t.textContent = `${placeShort(x.row, x.col)} · ${x.p === undefined ? 'kein Vorschlag' : pct(x.p)}`;
+    if (open) {
+      // No piece to try here: the gap as the photos show it alongside.
+      const gv = document.createElement('canvas');
+      gv.width = gv.height = 256;
+      if (drawGapTile(gv, x.row, x.col)) b.append(gv);
+      t.textContent += ' · Teil mit diesem Motiv suchen';
+    }
+    b.append(t);
+    b.addEventListener('click', () => openPlace(x));
+    box.append(b);
+  }
+}
+
+// A place of the list: its gap, or else the likeliest piece for it; with
+// neither, the tile opens bigger.
+function openPlace(x) {
+  const g = (state.result.gaps ?? []).find((v) => v.cell === x.cell);
+  let piece = null;
+  let alt = 0;
+  let best = -1;
+  for (const y of g ? [] : (state.queue ?? [])) {
+    candsOf(y).forEach((a, i) => {
+      if (a.cell === x.cell && (a.p ?? 0) > best) {
+        [piece, alt, best] = [y, i, a.p ?? 0];
+      }
+    });
+  }
+  if (!g && !piece) {
+    state.searchOpen = state.searchOpen === x.cell ? null : x.cell;
+    renderSteps();
+    return;
+  }
+  state.searchMode = false;
+  state.gapMode = !!g;
+  state.gapModeChosen = true;
+  if (g) state.gapFocus = { cell: g.cell, alt: 0 };
+  else state.focus = { sceneId: piece.sceneId, index: piece.index, alt };
+  renderSteps();
+  showStep();
+}
+
 // ---------- At the table ----------
 // The phone lies by the pieces and the hands are busy: one try fills the
 // screen with big buttons, the screen stays on, and on request the step is
@@ -2443,11 +2694,17 @@ document.addEventListener('visibilitychange', keepAwake);
 $('mode-gap').addEventListener('click', () => {
   state.gapMode = true;
   state.gapModeChosen = true;
+  state.searchMode = false;
   renderSteps();
 });
 $('mode-piece').addEventListener('click', () => {
   state.gapMode = false;
   state.gapModeChosen = true;
+  state.searchMode = false;
+  renderSteps();
+});
+$('mode-search').addEventListener('click', () => {
+  state.searchMode = true;
   renderSteps();
 });
 
@@ -2479,6 +2736,7 @@ function renderPieceList(q, cur) {
       state.focus = { sceneId: x.sceneId, index: x.index, alt: 0 };
       state.gapMode = false;
       state.gapModeChosen = true;
+      state.searchMode = false;
       renderSteps();
       $('step').scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
@@ -3287,6 +3545,7 @@ function tapAt(sx, sy) {
       state.focus = { sceneId: hit.sceneId, index: hit.index, alt: 0 };
       state.gapMode = false;
       state.gapModeChosen = true;
+      state.searchMode = false;
       renderSteps();
     } else openDetail(hit, info);
     return;
