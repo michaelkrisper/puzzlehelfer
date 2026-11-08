@@ -924,27 +924,47 @@
           if (!must.some((m) => m.cell === cell && m.rot === rot)) must.push({ cell, rot });
         }
       it.cands = PH.match.candidates(it.prep, it.sides, ref, ctx.free, must, fits);
-      if (L) for (const cd of it.cands) cd.fit = L.get(`${cd.cell},${cd.rot}`);
+      if (L)
+        for (const cd of it.cands) {
+          const f = L.get(`${cd.cell},${cd.rot}`);
+          cd.fit = f !== undefined && evidence.off.has(cd.cell) ? Math.max(-3, f) : f;
+        }
     }
     return PH.match.assign(items, ref, { filled: ctx.filled, holes: ctx.holes, unknown: ctx.unknown });
   }
 
   // Per piece "cell,rot" → log likelihood ratio of its outline fit in that
   // gap against the other pieces (PH.fit.evidence), null without outline.
+  // off: places whose rim no piece fits, the best one off by more than
+  // RIM_OFF places on average (the right one mostly about 0.015). Such a rim
+  // is itself off: it runs through a dark piece with holes in the mask, or
+  // on past a corner. When suggesting a place per piece, a misfit there
+  // counts at most -3 and the picture decides. Such rims: about a third of
+  // the places on Cats (8 photos), 5 of 36 on Kanagawa. Cats: the right place
+  // first for 110 pieces instead of 100, lost to an outline misfit 3 instead
+  // of 12; Kanagawa unchanged. Not in gap mode, where every piece would tie
+  // there (Cats top-3 9 → 6).
+  const RIM_OFF = 0.025;
   function outlineEvidence(items, rims, typeOk, ref) {
     const fits = items.map((it) => outlineFits(it, rims, typeOk(it), ref));
     const out = items.map(() => null);
+    out.off = new Set();
     for (const [cell] of rims) {
       const best = [];
+      let e = Number.POSITIVE_INFINITY;
       for (const m of fits) {
         let b = null;
         for (let rot = 0; rot < 4; rot++) {
           const f = m?.get(`${cell},${rot}`);
           if (f && (!b || f.e < b.e)) b = f;
         }
-        if (b) best.push(b.r);
+        if (b) {
+          best.push(b.r);
+          e = Math.min(e, b.e);
+        }
       }
       if (!best.length) continue;
+      if (e > RIM_OFF) out.off.add(cell);
       const ev = PH.fit.evidence(best);
       fits.forEach((m, k) => {
         for (let rot = 0; rot < 4; rot++) {
