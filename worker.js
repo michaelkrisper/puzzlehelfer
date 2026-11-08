@@ -355,7 +355,7 @@ const handlers = {
       sugg = PH.pipeline.solve(ref, list, { ...opts, progress: progressFor(id, solveStep) });
       request('readwrite', (os) => os.put({ key, list: [...sugg], gaps: sugg.gaps ?? [] }, 'solved'));
     }
-    const { free } = PH.pipeline.boardState(ref, list, opts.cells);
+    const { free, holes } = PH.pipeline.boardState(ref, list, opts.cells);
     return {
       suggestions: sugg.map((s) => ({ ...s, sceneId: ids[s.scene] })),
       gaps: (sugg.gaps ?? []).map((g) => ({
@@ -363,6 +363,8 @@ const handlers = {
         cands: g.cands.map((c) => ({ ...c, sceneId: ids[c.scene] })),
       })),
       free: [...free.keys()].filter((c) => free[c]),
+      // "cell,side" → knob (1) or hole (−1) a piece needs there (search list).
+      needs: holes.map(([k, g]) => [k, g.need]),
       stored: hit,
       scenes: ids.map((sid, i) => {
         const s = list[i];

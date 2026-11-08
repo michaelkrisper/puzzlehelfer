@@ -610,6 +610,56 @@ details.more summary {
   font-weight: bold;
 }
 
+/* Search list: the motifs of the open places without a sure piece, two
+   across, big enough to tell at a glance on the phone by the pieces. */
+.search-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  align-content: start;
+  /* A tile opened across both columns leaves no hole above it. */
+  grid-auto-flow: dense;
+}
+
+.search-list p {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.search-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8rem;
+  text-align: center;
+  cursor: pointer;
+}
+
+.search-tile canvas {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 8px;
+}
+
+/* No piece to try: bigger, the gap as the photos show it alongside. */
+.search-tile.open {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.search-tile.open span,
+.search-tile.open canvas:only-of-type {
+  grid-column: 1 / -1;
+}
+
 /* Buttons and rows set their own display; hidden must still hide them. */
 [hidden],
 .btn[hidden],
@@ -833,6 +883,26 @@ details.more summary {
 
 .step:not(.table) #step-undo {
   display: none;
+}
+
+.step.table #step-mode {
+  margin: 0;
+}
+
+.step:not(.search) .search-list,
+.step.search .step-pair,
+.step.search .cands,
+.step.search figure.step-where,
+.step.search .step-text,
+.step.search .step-buttons {
+  display: none;
+}
+
+.step.table .search-list {
+  order: 1;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /* Capture buttons: short labels in the compact row. */
