@@ -279,11 +279,30 @@
 
     const canvas = new OffscreenCanvas(h.width, h.height);
     const g = canvas.getContext('2d');
+    // iPhone tiles are full range but carry no colour information; Chrome
+    // reads them as limited range (16-235), which stretches dark and light
+    // apart (Pixel 4a: 71 -> 64, 205 -> 218 against libheif). Pressed back
+    // per tile; highlights clipped by the stretch stay clipped.
+    const tile = new OffscreenCanvas(h.tile.width, h.tile.height);
+    const tg = tile.getContext('2d', { willReadFrequently: true });
+    const back = Uint8Array.from({ length: 256 }, (_, x) => Math.round(16 + (x * 219) / 255));
     let failed = null;
     const dec = new VideoDecoder({
       output: (frame) => {
         const t = h.tiles[frame.timestamp];
-        g.drawImage(frame, t.x, t.y, h.tile.width, h.tile.height);
+        const full = frame.colorSpace?.fullRange === true;
+        if (full) g.drawImage(frame, t.x, t.y, h.tile.width, h.tile.height);
+        else {
+          tg.drawImage(frame, 0, 0, h.tile.width, h.tile.height);
+          const im = tg.getImageData(0, 0, h.tile.width, h.tile.height);
+          const px = im.data;
+          for (let i = 0; i < px.length; i += 4) {
+            px[i] = back[px[i]];
+            px[i + 1] = back[px[i + 1]];
+            px[i + 2] = back[px[i + 2]];
+          }
+          g.putImageData(im, t.x, t.y);
+        }
         frame.close();
       },
       error: (e) => {
