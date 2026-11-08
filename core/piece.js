@@ -215,10 +215,16 @@
     // the edges often land on a knob or hole instead of the core.
     if (prior && (!best || best.quality < 0.1)) {
       const pq = projectionQuad(pts, prior);
-      const fill = pq ? PH.geom.polygonArea(pq) / area : 0;
-      if (fill > 0.5 && fill < 1.8) {
-        const alt = finish(pts, pq, area, 0.59);
-        if (alt && (!best || alt.quality > best.quality)) best = alt;
+      // The jumps give the angle well, but a single jump may sit on a knob
+      // flank, a wavy cut or a leaked bit of shadow: the position comes from
+      // the area, with the projection quad as fallback.
+      const oq = pq && overlapQuad(pts, prior, Math.atan2(pq[1][1] - pq[0][1], pq[1][0] - pq[0][0]) / DEG);
+      for (const q of [oq, pq]) {
+        const fill = q ? PH.geom.polygonArea(q) / area : 0;
+        const alt = fill > 0.5 && fill < 1.8 ? finish(pts, q, area, 0.59) : null;
+        if (!alt) continue;
+        if (!best || alt.quality > best.quality) best = alt;
+        break;
       }
     }
     return best;
@@ -334,6 +340,74 @@
     const { eu, ev } = best;
     if (eu.hi - eu.lo < 4 || ev.hi - ev.lo < 4) return null;
     return [at(eu.lo, ev.lo), at(eu.hi, ev.lo), at(eu.hi, ev.hi), at(eu.lo, ev.hi)];
+  }
+
+  // Core rectangle of the prior size near the angle deg0 that covers most of
+  // the piece: moving it towards a knob gains less than the full core width
+  // it loses on the other side, so knobs, holes and wavy cuts hardly pull it.
+  function overlapQuad(poly, prior, deg0) {
+    const px = fillPoly(poly);
+    const np = px.length / 2;
+    if (np < 50) return null;
+    let cx = 0;
+    let cy = 0;
+    for (let i = 0; i < px.length; i += 2) {
+      cx += px[i];
+      cy += px[i + 1];
+    }
+    cx /= np;
+    cy /= np;
+    let R = 0;
+    for (const [x, y] of poly) R = Math.max(R, Math.abs(x - cx), Math.abs(y - cy));
+    R = Math.ceil(R * 1.5) + 4;
+    const N = 2 * R + 1;
+    const M = N + 1;
+    // Summed area table of the piece pixels in the turned frame.
+    const I = new Float64Array(M * M);
+    const fit = (deg) => {
+      const c = Math.cos(deg * DEG);
+      const s = Math.sin(deg * DEG);
+      I.fill(0);
+      for (let i = 0; i < px.length; i += 2) {
+        const dx = px[i] - cx;
+        const dy = px[i + 1] - cy;
+        const u = Math.round(dx * c + dy * s + R);
+        const v = Math.round(-dx * s + dy * c + R);
+        I[(v + 1) * M + u + 1] += 1;
+      }
+      for (let v = 1; v <= N; v++) {
+        let row = 0;
+        for (let u = 1; u <= N; u++) {
+          row += I[v * M + u];
+          I[v * M + u] = row + I[(v - 1) * M + u];
+        }
+      }
+      let best = null;
+      for (const [a0, b0] of [prior, [prior[1], prior[0]]]) {
+        const a = Math.round(a0);
+        const b = Math.round(b0);
+        for (let v = 0; v + b <= N; v++)
+          for (let u = 0; u + a <= N; u++) {
+            const sc = I[(v + b) * M + u + a] - I[v * M + u + a] - I[(v + b) * M + u] + I[v * M + u];
+            if (!best || sc > best.sc) best = { deg, u, v, a, b, sc };
+          }
+      }
+      return best;
+    };
+    let best = null;
+    for (let d = deg0 - 2; d <= deg0 + 2; d += 0.5) {
+      const r = fit(d);
+      if (r && (!best || r.sc > best.sc)) best = r;
+    }
+    if (!best) return null;
+    const c = Math.cos(best.deg * DEG);
+    const s = Math.sin(best.deg * DEG);
+    const at = (u, v) => [
+      cx + (u - R - 0.5) * c - (v - R - 0.5) * s,
+      cy + (u - R - 0.5) * s + (v - R - 0.5) * c,
+    ];
+    const { u, v, a, b } = best;
+    return [at(u, v), at(u + a, v), at(u + a, v + b), at(u, v + b)];
   }
 
   // shapeQ: shape quality given from outside (projection way); otherwise from
