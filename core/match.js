@@ -271,6 +271,12 @@
   }
 
   // Pixel comparison around the cell, ± a quarter cell.
+  // A wrong place often looks better slid by a third of a cell; the right one
+  // rarely needs that. Cats (8 photos, 162 pieces): a shift of a block or
+  // more at 21 % of the right places, at 67 % of the five best wrong ones.
+  // Beyond 3/4 block the score gets worse, by a third at the search limit.
+  const SHIFT_COST = 0.5;
+  const SHIFT_FREE = 0.75;
   function fineScore(prep, ref, cand) {
     const { C, G, W, H, lab: rl, cols } = ref;
     const { lab, mask } = prep.rots[cand.rot];
@@ -317,17 +323,19 @@
       return ws > 20 ? affineResidual(acc, ws) + (RAW_WEIGHT * s) / ws : Infinity;
     };
     const R = C / G;
+    const shift = (ox, oy) =>
+      1 + SHIFT_COST * Math.max(0, Math.max(Math.abs(ox), Math.abs(oy)) / R - SHIFT_FREE);
     let best = { e: Infinity, ox: 0, oy: 0 };
     for (let oy = -R; oy <= R; oy += 4) {
       for (let ox = -R; ox <= R; ox += 4) {
-        const e = evalAt(ox, oy, 3);
+        const e = evalAt(ox, oy, 3) * shift(ox, oy);
         if (e < best.e) best = { e, ox, oy };
       }
     }
     const c0 = best;
     for (let oy = c0.oy - 3; oy <= c0.oy + 3; oy++) {
       for (let ox = c0.ox - 3; ox <= c0.ox + 3; ox++) {
-        const e = evalAt(ox, oy, 2);
+        const e = evalAt(ox, oy, 2) * shift(ox, oy);
         if (e < best.e) best = { e, ox, oy };
       }
     }
