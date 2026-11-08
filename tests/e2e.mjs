@@ -63,6 +63,17 @@ const chrome = spawn(
   ],
   { stdio: 'ignore' },
 );
+// The finally block below does not run when the test is interrupted; a
+// Chrome profile is ~180 MB.
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => {
+    chrome.kill();
+    server?.kill();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(work, { recursive: true, force: true });
+    process.exit(130);
+  });
+}
 
 let ws;
 let msgId = 0;
