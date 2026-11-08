@@ -58,7 +58,11 @@ const STOPPED = 'Abgebrochen';
 const STOPPING = 'Wird abgebrochen, sobald das Foto fertig gerechnet ist …';
 let resendId = 0;
 const droppable = ([id, p]) =>
-  p.type === 'scene' || p.type === 'removeScene' || p.type === 'clearScenes' || id === resendId;
+  p.type === 'scene' ||
+  p.type === 'removeScene' ||
+  p.type === 'clearScenes' ||
+  p.type === 'warm' ||
+  id === resendId;
 function restartWorker() {
   worker.terminate();
   for (const p of pending.values()) {
@@ -66,10 +70,9 @@ function restartWorker() {
     else p.resolve({});
   }
   pending.clear();
-  $('engine').textContent = 'Bilderkennung lädt …';
-  $('engine').classList.remove('ready');
+  // Messages wait in order until OpenCV is loaded; the header stays at
+  // "bereit" meanwhile.
   startWorker();
-  // Messages wait in order until OpenCV is loaded.
   if (!state.refView) return;
   resendId = nextId;
   sendReference().catch((err) => err.message !== STOPPED && console.warn(err));
@@ -177,6 +180,7 @@ async function clearRound() {
   const os = d.transaction('kv', 'readwrite').objectStore('kv');
   os.delete(PHOTOS);
   os.delete(ANALYSES);
+  os.delete('solved');
 }
 // After every tap on the results (skip, choices, marks: after the handlers),
 // and when switching to the camera app, where the tab may end.
@@ -1793,21 +1797,24 @@ async function solve() {
   jobStatus('Plätze werden gesucht …');
   const job = startJob('solve');
   run.stale = false;
+  const marks = {
+    placed: state.marks.filter((m) => m.kind === 'placed'),
+    removed: state.marks.filter((m) => m.kind === 'removed'),
+    nofit: state.marks.filter((m) => m.kind === 'nofit'),
+    cells: state.marks.filter((m) => m.kind === 'cell').map(({ cell, free }) => ({ cell, free })),
+    crop: state.crop,
+  };
   let r;
   try {
-    r = await call(
-      'solve',
-      {
-        placed: state.marks.filter((m) => m.kind === 'placed'),
-        removed: state.marks.filter((m) => m.kind === 'removed'),
-        nofit: state.marks.filter((m) => m.kind === 'nofit'),
-        cells: state.marks.filter((m) => m.kind === 'cell').map(({ cell, free }) => ({ cell, free })),
-        crop: state.crop,
-      },
-      [],
-      (m) => progressed(job, m),
-    );
+    // After a reload the result from before it, if nothing changed.
+    r = await call('solve', { ...marks, stored: run.restoring }, [], (m) => progressed(job, m));
     job.ok = true;
+    // That one is no measure of speed; the search runs once more in the
+    // background (worker.js warm).
+    if (r.stored) {
+      job.alone = false;
+      call('warm', marks).catch((err) => console.warn(err));
+    }
   } finally {
     endJob('solve');
   }

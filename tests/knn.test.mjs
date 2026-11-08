@@ -88,3 +88,24 @@ test('knn2 with a single reference row reports no second neighbour', { skip: !kn
   assert.equal(got[2], 0xffffffff);
   assert.equal(got[5], 0xffffffff);
 });
+
+// Near rows early make most later rows stop after part of the distance
+// (wasm/knn.c knn_l2u8); the result must be the same, ties included.
+test('knn2 l2 with near and equal rows matches brute force', { skip: !knn.available() }, () => {
+  const bytes = 128;
+  const nq = 20;
+  const nr = 130;
+  const q = bytesOf(nq * bytes, 13);
+  const r = bytesOf(nr * bytes, 17);
+  const noise = bytesOf(nq * bytes, 19);
+  for (let i = 0; i < nq; i++)
+    for (let k = 0; k < bytes; k++) {
+      const v = q[i * bytes + k];
+      r[i * bytes + k] = Math.min(255, v + (noise[i * bytes + k] & 1));
+      r[(60 + i) * bytes + k] = v;
+      r[(100 + i) * bytes + k] = v;
+    }
+  const got = knn.knn2('l2', q, nq, r, nr, bytes);
+  const want = reference('l2', q, nq, r, nr, bytes);
+  for (let i = 0; i < nq; i++) assert.deepEqual([...got.subarray(i * 3, i * 3 + 3)], want[i], `query ${i}`);
+});

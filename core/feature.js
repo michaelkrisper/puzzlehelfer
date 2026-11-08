@@ -127,6 +127,38 @@
     return inside;
   }
 
+  // pointInPoly for many points: the edges sorted into bands of y, so that a
+  // point meets only the edges of its band (same result, far fewer tests).
+  function polyTest(poly) {
+    let y0 = Infinity;
+    let y1 = -Infinity;
+    for (const [, y] of poly) {
+      y0 = Math.min(y0, y);
+      y1 = Math.max(y1, y);
+    }
+    const n = Math.max(1, Math.min(64, poly.length >> 3));
+    const h = (y1 - y0) / n || 1;
+    const band = (y) => Math.min(n - 1, Math.max(0, Math.floor((y - y0) / h)));
+    const bands = Array.from({ length: n }, () => []);
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const a = poly[i][1];
+      const b = poly[j][1];
+      // A level edge is never crossed; any other one only by the y between.
+      if (a === b) continue;
+      for (let k = band(Math.min(a, b)); k <= band(Math.max(a, b)); k++) bands[k].push(i, j);
+    }
+    return (x, y) => {
+      const e = bands[band(y)];
+      let inside = false;
+      for (let k = 0; k < e.length; k += 2) {
+        const [xi, yi] = poly[e[k]];
+        const [xj, yj] = poly[e[k + 1]];
+        if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+      }
+      return inside;
+    };
+  }
+
   // Similarity transform a → b (rotation, scale, shift) by RANSAC over point
   // pairs. scale: allowed range [lo, hi].
   function ransacSimilarity(a, b, tol, scale, iters = 1500) {
@@ -381,6 +413,7 @@
     });
     // Point pairs per piece, collected over both detectors.
     const pairs = contours.map(() => ({ a: [], b: [] }));
+    const tests = contours.map(() => null);
     for (const s of sf.sets) {
       const full = ref.feat.find((f) => f.name === s.name);
       const r = full && free ? gapSubset(ref, full, free) : full;
@@ -394,7 +427,8 @@
         for (let p = 0; p < contours.length; p++) {
           const b = bbox[p];
           if (x < b[0] || y < b[1] || x > b[2] || y > b[3]) continue;
-          if (pointInPoly(x, y, contours[p])) {
+          tests[p] ??= polyTest(contours[p]);
+          if (tests[p](x, y)) {
             owner[i] = p;
             idx.push(i);
             break;

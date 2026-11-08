@@ -27,6 +27,9 @@ let ref = null;
 let refQuad = null;
 let refCount = 0; // piece count from the box
 const scenes = new Map(); // id → result of analyzeScene
+// id → stamp of its analysis, new each time a photo is analysed: a stored
+// search result fits only the very same analyses.
+const analyses = new Map();
 const points = new Map(); // id → ORB points, to lay photos onto each other
 const near = new Map(); // id → photos of the sweep next to it, nearest first
 const tried = new Set(); // pairs of photos compared, `${id}:${other}`
@@ -86,6 +89,7 @@ function scaleHint(image) {
 
 function forget() {
   scenes.clear();
+  analyses.clear();
   points.clear();
   near.clear();
   tried.clear();
@@ -221,6 +225,29 @@ function seamQuad(seams) {
   };
 }
 
+// The search for places with the user's marks (app.js solve) and what its
+// result depends on: the photos, each by the analysis it has, their places on
+// the table, and the marks as far as the search reads them.
+function search({ placed = [], removed = [], nofit = [], cells = [], crop = null }) {
+  const ids = [...scenes.keys()];
+  const list = ids.map((k) => scenes.get(k));
+  const local = (arr) =>
+    arr.map((p) => ({ ...p, scene: ids.indexOf(p.sceneId) })).filter((p) => p.scene >= 0);
+  const opts = { placed: local(placed), removed: local(removed), nofit: local(nofit), cells, crop };
+  const key = JSON.stringify([
+    ref.key,
+    ref.cols,
+    ref.rows,
+    ids.map((k) => [k, analyses.get(k) ?? null, scenes.get(k).view?.H ?? null]),
+    opts.placed.map((p) => [p.scene, p.index, p.cell, p.rot]),
+    opts.removed.map((p) => [p.scene, p.index]),
+    opts.nofit.map((p) => [p.scene, p.index, p.cell]),
+    cells.map((c) => [c.cell, c.free]),
+    crop,
+  ]);
+  return { ids, list, opts, key };
+}
+
 const handlers = {
   quad({ image }) {
     return { quad: PH.reference.findPictureQuad(cv, image) };
@@ -245,22 +272,25 @@ const handlers = {
     const made = `${key}:${ref.key}:${ref.cols}x${ref.rows}`;
     let s;
     let pts;
+    let stamp;
     // Whether the analysis is in the database (a new worker can get it back).
     let kept = true;
     if (!image) {
       const r = await stored(sceneId);
       if (r?.made !== made) return { miss: true };
-      ({ s, points: pts } = r);
+      ({ s, points: pts, stamp } = r);
     } else {
       const progress = progressFor(id, sceneStep);
       s = PH.pipeline.analyzeScene(cv, image, ref, progress, { scale: scaleHint(image), table });
       progress(PLACING);
       pts = PH.stitch.describe(cv, image);
       // As analysed: placing and solving add to it.
-      kept = !!(await keep(sceneId, { made, s: plain(s), points: pts }));
+      stamp = `${Date.now()}:${Math.random()}`;
+      kept = !!(await keep(sceneId, { made, s: plain(s), points: pts, stamp }));
     }
     if (s.table) table = s.table;
     scenes.set(sceneId, s);
+    analyses.set(sceneId, stamp);
     points.set(sceneId, pts);
     near.set(sceneId, next);
     placeAll();
@@ -294,6 +324,7 @@ const handlers = {
   },
   removeScene({ sceneId }) {
     scenes.delete(sceneId);
+    analyses.delete(sceneId);
     points.delete(sceneId);
     near.delete(sceneId);
     return {};
@@ -302,20 +333,29 @@ const handlers = {
     forget();
     return {};
   },
-  solve({ id, placed = [], removed = [], nofit = [], cells = [], crop = null }) {
-    const ids = [...scenes.keys()];
-    const list = ids.map((k) => scenes.get(k));
-    const local = (arr) =>
-      arr.map((p) => ({ ...p, scene: ids.indexOf(p.sceneId) })).filter((p) => p.scene >= 0);
-    const sugg = PH.pipeline.solve(ref, list, {
-      progress: progressFor(id, solveStep),
-      placed: local(placed),
-      removed: local(removed),
-      nofit: local(nofit),
-      cells,
-      crop,
-    });
-    const { free } = PH.pipeline.boardState(ref, list, cells);
+  // The search once more without an answer, after a stored result: it fills
+  // the caches of the outline fit (pipeline.js outlineFits), so that the
+  // next search, after the next tap, takes half the time.
+  warm(marks) {
+    const { list, opts } = search(marks);
+    if (list.length) PH.pipeline.solve(ref, list, opts);
+    return {};
+  },
+  // stored: the stored result if it was searched with the same photos,
+  // analyses and marks (after a reload).
+  async solve({ id, stored: fromStore = false, ...marks }) {
+    const { ids, list, opts, key } = search(marks);
+    let sugg = null;
+    if (fromStore) {
+      const r = await request('readonly', (os) => os.get('solved'));
+      if (r?.key === key) sugg = Object.assign(r.list, { gaps: r.gaps });
+    }
+    const hit = !!sugg;
+    if (!sugg) {
+      sugg = PH.pipeline.solve(ref, list, { ...opts, progress: progressFor(id, solveStep) });
+      request('readwrite', (os) => os.put({ key, list: [...sugg], gaps: sugg.gaps ?? [] }, 'solved'));
+    }
+    const { free } = PH.pipeline.boardState(ref, list, opts.cells);
     return {
       suggestions: sugg.map((s) => ({ ...s, sceneId: ids[s.scene] })),
       gaps: (sugg.gaps ?? []).map((g) => ({
@@ -323,6 +363,7 @@ const handlers = {
         cands: g.cands.map((c) => ({ ...c, sceneId: ids[c.scene] })),
       })),
       free: [...free.keys()].filter((c) => free[c]),
+      stored: hit,
       scenes: ids.map((sid, i) => {
         const s = list[i];
         return {
